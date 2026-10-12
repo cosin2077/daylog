@@ -1,0 +1,4 @@
+interface:
+  display_name: "Daylog 工作日记"
+  short_description: "安装和控制省资源的 macOS 工作日记，查询时间线并分析有证据的屏幕活动"
+  default_prompt: "使用 $daylog 查看我今天的工作记录，并说明尚未分析的时段。"
