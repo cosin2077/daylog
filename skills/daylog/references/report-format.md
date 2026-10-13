@@ -1,5 +1,35 @@
 # Agent report format
 
+Read `batch.schema_version` from `daylog pending`. New batches use v2; older batches without that field still use the legacy format below. Never submit a stored report back as model output.
+
+## v2: interpretation only
+
+Use actual batch/frame IDs and optional task IDs from `batch.context`. Return this shape, without timestamps or durations:
+
+```json
+{
+  "schema_version": 2,
+  "batch_id": "actual-batch-id",
+  "segments": [{
+    "title": "调整报告布局",
+    "summary": "可见正在编辑布局并查看预览；无法确认完成。",
+    "category": "工作",
+    "object": "报告页面",
+    "actions": ["编辑", "预览"],
+    "confidence": "medium",
+    "task_id": "",
+    "evidence": ["actual-frame-id"],
+    "uncertainties": []
+  }]
+}
+```
+
+Up to 12 segments. Each needs unique known screenshot evidence; a frame can belong to only one segment. Omit unidentifiable frames, or return `segments: []` if none can be identified. Confidence is high/medium/low; category is 工作/学习/沟通/其他. Link only a task from the supplied context with continuity evidence; leave task_id empty for a new task. Low confidence cannot reuse a task ID. Titles <=120 characters, summaries <=1200, object <=240; actions/uncertainties <=8 items of <=240 characters. Both arrays are required, but may be empty.
+
+The CLI computes time from local observations, preserves unknown intervals and assigns IDs. Never fill gaps or infer completed work. Commit through `daylog commit --file ...`, then reread the report. Repeating a commit refuses overwrite. Use `daylog prompt` for current v2 instructions.
+
+## Legacy batches
+
 Use actual values from `daylog pending`; the following is a schema sketch, not sample data to commit:
 
 ```json

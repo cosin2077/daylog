@@ -21,6 +21,9 @@ type Config struct {
 	HeartbeatSeconds    int          `json:"heartbeat_seconds"`
 	ChangeThreshold     float64      `json:"change_threshold"`
 	BatchSeconds        int          `json:"batch_seconds"`
+	TargetImages        int          `json:"target_images_per_batch"`
+	MaxGapSeconds       int          `json:"max_observation_gap_seconds"`
+	MaxImagesPerDay     int          `json:"max_images_per_day"`
 	MaxImages           int          `json:"max_images_per_batch"`
 	RawRetentionDays    int          `json:"raw_retention_days"`
 	ReportRetentionDays int          `json:"report_retention_days"`
@@ -34,9 +37,10 @@ type Config struct {
 }
 
 type AgentConfig struct {
-	Enabled        bool     `json:"enabled"`
-	Order          []string `json:"order"`
-	TimeoutSeconds int      `json:"timeout_seconds"`
+	Enabled         bool     `json:"enabled"`
+	Order           []string `json:"order"`
+	TimeoutSeconds  int      `json:"timeout_seconds"`
+	InheritLoginEnv bool     `json:"inherit_login_environment"`
 }
 type UpdateConfig struct {
 	Source string `json:"source"`
@@ -53,17 +57,18 @@ type AIConfig struct {
 	Enabled           bool   `json:"enabled"`
 	Endpoint          string `json:"endpoint"`
 	Model             string `json:"model"`
+	APIKey            string `json:"api_key,omitempty"`
 	KeyEnv            string `json:"key_env"`
 	MaxRequestsPerDay int    `json:"max_requests_per_day"`
 }
 
 func DefaultConfig() Config {
 	return Config{IntervalSeconds: 30, Height: 720, Quality: 60, IdleSeconds: 300,
-		MinSaveSeconds: 90, HeartbeatSeconds: 300, ChangeThreshold: 0.035,
-		BatchSeconds: 900, MaxImages: 6, RawRetentionDays: 3, ReportRetentionDays: 90, MaxStorageBytes: 256 << 20,
+		MinSaveSeconds: 90, HeartbeatSeconds: 300, ChangeThreshold: 0.005,
+		BatchSeconds: 900, TargetImages: 4, MaxImages: 8, MaxGapSeconds: 300, MaxImagesPerDay: 256, RawRetentionDays: 3, ReportRetentionDays: 90, MaxStorageBytes: 256 << 20,
 		MaxPendingBatches: 96, BlockedApps: []string{},
 		Power: PowerConfig{BatteryIntervalSeconds: 120, LowPowerIntervalSeconds: 180, PauseBelowPercent: 20},
-		Agent: AgentConfig{Enabled: true, Order: []string{"claude", "codex", "hermes"}, TimeoutSeconds: 90},
+		Agent: AgentConfig{Enabled: true, Order: []string{"claude", "codex", "hermes"}, TimeoutSeconds: 90, InheritLoginEnv: true},
 		AI:    AIConfig{KeyEnv: "DAYLOG_API_KEY", MaxRequestsPerDay: 48}}
 }
 
@@ -72,7 +77,7 @@ func DefaultRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, "Library", "Application Support", "Daylog"), nil
+	return filepath.Join(home, ".daylog"), nil
 }
 
 func (c Config) Validate() error {
@@ -87,6 +92,9 @@ func (c Config) Validate() error {
 	}
 	if c.BatchSeconds < 300 || c.BatchSeconds > 3600 || c.MaxImages < 1 || c.MaxImages > 12 || c.RawRetentionDays < 1 || c.RawRetentionDays > 30 || c.MaxStorageBytes < 8<<20 || c.MaxPendingBatches < 1 || c.MaxPendingBatches > 256 {
 		return errors.New("invalid batch or storage bounds")
+	}
+	if c.TargetImages < 1 || c.TargetImages > 12 || c.MaxGapSeconds < 30 || c.MaxGapSeconds > 600 || c.MaxImagesPerDay < 1 || c.MaxImagesPerDay > 3072 {
+		return errors.New("target images must be 1..12, observation gap 30..600 seconds, daily images 1..3072")
 	}
 	if c.AI.MaxRequestsPerDay < 1 || c.AI.MaxRequestsPerDay > 256 {
 		return errors.New("AI daily request budget must be 1..256")
@@ -115,6 +123,9 @@ func (c Config) Validate() error {
 	}
 	if strings.ContainsAny(c.AI.KeyEnv, "=\x00\r\n") {
 		return errors.New("invalid key environment variable name")
+	}
+	if len(c.AI.APIKey) > 16384 || strings.ContainsAny(c.AI.APIKey, "\x00\r\n") {
+		return errors.New("API Key 必须是单行文本，且不得超过 16 KiB")
 	}
 	return nil
 }
@@ -151,4 +162,45 @@ func ReadConfig(root string) (Config, error) {
 		return c, errors.New("configuration contains trailing content")
 	}
 	return c, c.Validate()
+}
+
+// Profiles tune resource budgets without replacing provider/privacy settings.
+func (c *Config) ApplyProfile(name string) error {
+	switch name {
+	case "balanced":
+		c.IntervalSeconds = 30
+		c.MinSaveSeconds = 90
+		c.BatchSeconds = 900
+		c.TargetImages = 4
+		c.MaxImages = 8
+		c.MaxImagesPerDay = 256
+		c.AI.MaxRequestsPerDay = 48
+		c.Power.BatteryIntervalSeconds = 120
+		c.Power.LowPowerIntervalSeconds = 180
+	case "battery":
+		c.IntervalSeconds = 30
+		c.MinSaveSeconds = 120
+		c.BatchSeconds = 1800
+		c.TargetImages = 3
+		c.MaxImages = 6
+		c.MaxImagesPerDay = 144
+		c.AI.MaxRequestsPerDay = 32
+		c.Power.BatteryIntervalSeconds = 180
+		c.Power.LowPowerIntervalSeconds = 300
+	case "detailed":
+		c.IntervalSeconds = 30
+		c.MinSaveSeconds = 30
+		c.BatchSeconds = 600
+		c.TargetImages = 6
+		c.MaxImages = 12
+		c.MaxImagesPerDay = 384
+		c.AI.MaxRequestsPerDay = 64
+		c.Power.BatteryIntervalSeconds = 120
+		c.Power.LowPowerIntervalSeconds = 180
+	default:
+		return errors.New("profile 必须为 balanced、battery 或 detailed")
+	}
+	c.HeartbeatSeconds = 300
+	c.MaxGapSeconds = 300
+	return nil
 }

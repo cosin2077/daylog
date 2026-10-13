@@ -30,6 +30,9 @@ type Runner struct {
 	draft           Batch
 	lastFingerprint Fingerprint
 	lastApp         string
+	lastFrame       string
+	observedState   string
+	observedApp     string
 	lastTick        time.Time
 	lastCleanup     time.Time
 	lastInventory   time.Time
@@ -87,7 +90,14 @@ func (r *Runner) Run(ctx context.Context) error {
 	go func() { defer workers.Done(); r.serve(ctx, listener, cancel) }()
 	workers.Add(1)
 	go func() { defer workers.Done(); r.analysisLoop(ctx) }()
-	defer func() { cancel(); listener.Close(); workers.Wait(); _ = r.seal(); r.publish() }()
+	defer func() {
+		cancel()
+		listener.Close()
+		workers.Wait()
+		r.noteState(time.Now(), "stopped", "")
+		_ = r.seal()
+		r.publish()
+	}()
 	for {
 		delay := r.step(ctx, time.Now())
 		r.publish()
@@ -171,6 +181,7 @@ func (r *Runner) setError(reason string) { r.mu.Lock(); r.status.Error = reason;
 func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 	env, err := r.Source.Environment(ctx)
 	if err != nil {
+		r.noteState(now, "environment_unavailable", "")
 		r.setError("environment_unavailable")
 		return time.Minute
 	}
@@ -194,6 +205,11 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		activeCancel()
 	}
 	if paused || p.PauseReason != "" {
+		state := p.PauseReason
+		if paused {
+			state = "paused"
+		}
+		r.noteState(now, state, "")
 		if err = r.seal(); err != nil {
 			r.setError("queue_full")
 		} else {
@@ -202,6 +218,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		return p.Delay
 	}
 	if r.Config.IdleSeconds > 0 && env.IdleSeconds >= float64(r.Config.IdleSeconds) {
+		r.noteState(now, "idle", "")
 		r.mu.Lock()
 		r.status.SkippedIdle++
 		r.mu.Unlock()
@@ -214,6 +231,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 	}
 	for _, blocked := range r.Config.BlockedApps {
 		if blocked == env.App {
+			r.noteState(now, "blocked", "")
 			r.mu.Lock()
 			r.status.SkippedBlocked++
 			r.mu.Unlock()
@@ -226,17 +244,21 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		}
 	}
 	if !env.Permission {
+		r.noteState(now, "screen_permission_required", "")
 		r.setError("screen_permission_required")
 		return time.Minute
 	}
 	if !r.lastTick.IsZero() && now.Sub(r.lastTick) > 3*p.Delay {
+		r.noteState(now, "missing", "")
 		if err = r.seal(); err != nil {
 			r.setError("queue_full")
 			return p.Delay
 		}
 	}
 	r.lastTick = now
+	r.noteState(now, "active", env.App)
 	if len(r.draft.Frames) > 0 && now.Sub(r.draft.Start) >= time.Duration(r.Config.BatchSeconds)*time.Second {
+		r.draft.End = r.draft.Start.Add(time.Duration(r.Config.BatchSeconds) * time.Second)
 		if err = r.seal(); err != nil {
 			r.setError("queue_full")
 			return p.Delay
@@ -248,6 +270,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		return p.Delay
 	}
 	if len(pending) >= r.Config.MaxPendingBatches {
+		r.noteState(now, "queue_full", "")
 		r.setError("queue_full")
 		return p.Delay
 	}
@@ -264,11 +287,24 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 	previousSave := r.status.LastSaved
 	previousCapture := r.status.LastCapture
 	r.mu.Unlock()
-	if (previousSave != nil && now.Sub(*previousSave) < time.Duration(r.Config.MinSaveSeconds)*time.Second) || (previousCapture != nil && now.Sub(*previousCapture) < time.Duration(r.Config.MinSaveSeconds)*time.Second) {
+	captureInterval := time.Duration(r.Config.MinSaveSeconds) * time.Second
+	if p.Delay > captureInterval {
+		captureInterval = p.Delay
+	}
+	if (previousSave != nil && now.Sub(*previousSave) < captureInterval) || (previousCapture != nil && now.Sub(*previousCapture) < captureInterval) {
 		return p.Delay
 	}
 	data, err := r.Source.Capture(ctx, native.CaptureOptions{Height: r.Config.Height, Quality: r.Config.Quality, WindowID: r.Config.WindowID, Blocked: r.Config.BlockedApps})
 	if err != nil {
+		if errors.Is(err, native.ErrBlocked) {
+			r.noteState(now, "blocked", "")
+			r.mu.Lock()
+			r.status.SkippedBlocked++
+			r.status.Error = ""
+			r.mu.Unlock()
+			return p.Delay
+		}
+		r.noteState(now, "capture_unavailable", "")
 		r.setError("capture_unavailable_check_permission")
 		return p.Delay
 	}
@@ -282,29 +318,25 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 	r.status.Captures++
 	at := now.UTC()
 	r.status.LastCapture = &at
-	lastSaved := r.status.LastSaved
 	r.mu.Unlock()
 	fp, err := FingerprintJPEG(data)
 	if err != nil {
 		r.setError("invalid_capture")
 		return p.Delay
 	}
-	var last time.Time
-	if lastSaved != nil {
-		last = *lastSaved
-	}
 	app := env.App
 	if r.Config.WindowID != 0 {
 		app = fmt.Sprintf("window:%d", r.Config.WindowID)
 	}
-	if !ShouldSave(r.Config, now, last, app, r.lastApp, fp, r.lastFingerprint) {
+	if r.lastFrame != "" && app == r.lastApp && !VisualChanged(r.Config, fp, r.lastFingerprint) {
 		r.mu.Lock()
 		r.status.SkippedUnchanged++
 		r.mu.Unlock()
-		if len(r.draft.Frames) > 0 {
-			r.draft.End = now.UTC()
+		if err = r.observe(Observation{At: now.UTC(), App: app, FrameID: r.lastFrame, State: "sampled"}); err != nil {
+			r.setError("observation_write_failed")
+		} else {
+			r.setError("")
 		}
-		r.setError("")
 		return p.Delay
 	}
 	frame, err := r.Store.SaveFrame(now, app, data, r.Config)
@@ -313,11 +345,23 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		return p.Delay
 	}
 	if len(r.draft.Frames) == 0 {
-		r.draft = Batch{ID: ID(now), Start: now.UTC()}
+		gap := int(2 * captureInterval / time.Second)
+		if gap > r.Config.MaxGapSeconds {
+			gap = r.Config.MaxGapSeconds
+		}
+		r.draft = Batch{SchemaVersion: 2, ID: ID(now), Start: now.UTC(), MaxGapSeconds: gap, SupportGapSeconds: r.Config.MaxGapSeconds}
+	}
+	frame.Change = Difference(fp, r.lastFingerprint)
+	frame.Reason = "change"
+	if r.lastFrame == "" {
+		frame.Reason = "first"
+	} else if app != r.lastApp {
+		frame.Reason = "app_change"
 	}
 	r.draft.Frames = append(r.draft.Frames, frame)
 	r.draft.End = now.UTC().Add(time.Second)
-	if err = r.Store.SaveDraft(r.draft); err != nil {
+	r.lastFrame = frame.ID
+	if err = r.observe(Observation{At: now.UTC(), App: app, FrameID: frame.ID, State: "sampled"}); err != nil {
 		r.setError("draft_write_failed")
 		return p.Delay
 	}
@@ -341,6 +385,7 @@ func (r *Runner) seal() error {
 		return err
 	}
 	r.draft = Batch{}
+	r.lastFrame = ""
 	return nil
 }
 

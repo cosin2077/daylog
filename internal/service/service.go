@@ -1,12 +1,18 @@
 package service
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/xml"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+func StartsAtLogin(home, root string) bool {
+	data, err := os.ReadFile(Path(home, root))
+	return err == nil && bytes.Contains(data, []byte("<key>RunAtLoad</key><true/>"))
+}
 
 func Label(root string) string {
 	hash := sha256.Sum256([]byte(root))

@@ -31,7 +31,7 @@ char *dg_environment(void) {
         }
         if(info) CFRelease(info);
         NSDictionary *session=CFBridgingRelease(CGSessionCopyCurrentDictionary());
-        BOOL locked=[session[@"CGSSessionScreenIsLocked"] boolValue] || (session && ![session[@"kCGSessionOnConsoleKey"] boolValue]);
+        BOOL locked=[session[@"CGSSessionScreenIsLocked"] boolValue] || (session && ![session[(__bridge NSString *)kCGSessionOnConsoleKey] boolValue]);
         NSDictionary *env=@{
             @"app":frontmost(),
             @"idle_seconds":@(CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateHIDSystemState,kCGAnyInputEventType)),

@@ -93,12 +93,13 @@ type testSource struct {
 	env      native.Environment
 	data     []byte
 	captures int
+	err      error
 }
 
 func (s *testSource) Environment(context.Context) (native.Environment, error) { return s.env, nil }
 func (s *testSource) Capture(context.Context, native.CaptureOptions) ([]byte, error) {
 	s.captures++
-	return s.data, nil
+	return s.data, s.err
 }
 
 func TestRunnerAvoidsCaptureInsideSaveIntervalAndPowerStops(t *testing.T) {
@@ -119,6 +120,27 @@ func TestRunnerAvoidsCaptureInsideSaveIntervalAndPowerStops(t *testing.T) {
 	}
 	if source.captures != 3 {
 		t.Fatal("suppressed states performed a capture")
+	}
+}
+
+func TestRunnerReportsBlockedBackgroundWindowWithoutSaving(t *testing.T) {
+	s := testStore(t)
+	source := &testSource{
+		env: native.Environment{App: "allowed.foreground", Permission: true},
+		err: native.ErrBlocked,
+	}
+	c := DefaultConfig()
+	c.WindowID = 123
+	c.BlockedApps = []string{"blocked.background"}
+	r := Runner{Store: s, Config: c, Source: source}
+	r.step(context.Background(), time.Now())
+	status := r.snapshot()
+	if source.captures != 1 || status.SkippedBlocked != 1 || status.Captures != 0 || status.Saved != 0 || status.Error != "" {
+		t.Fatalf("blocked target misreported or saved: %+v", status)
+	}
+	frames, err := os.ReadDir(filepath.Join(s.Root, "frames"))
+	if err != nil || len(frames) != 0 {
+		t.Fatalf("blocked target wrote a screenshot: %v", err)
 	}
 }
 
@@ -283,6 +305,30 @@ func TestEndpointPolicyAndQueueCap(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(s.Root, "draft.json")); err != nil {
 		t.Fatal("queue cap discarded live evidence")
+	}
+}
+
+// Live TextEdit edits changed about 0.9-3% of sampled colour values, while
+// static caret/chrome noise was below 0.1%. Keep that gap in the default policy.
+func TestSamplerKeepsTextEditsAndSkipsSmallNoise(t *testing.T) {
+	c := DefaultConfig()
+	now := time.Now()
+	last := now.Add(-2 * time.Duration(c.MinSaveSeconds) * time.Second)
+	var previous, changed, noise Fingerprint
+	for i := range previous {
+		previous[i] = 255
+		changed[i] = 255
+		noise[i] = 255
+	}
+	for i := 0; i < 15; i++ {
+		changed[i] = 0
+	}
+	noise[0] = 0
+	if !ShouldSave(c, now, last, "window:1", "window:1", changed, previous) {
+		t.Fatal("small text edit was discarded until heartbeat")
+	}
+	if ShouldSave(c, now, last, "window:1", "window:1", noise, previous) {
+		t.Fatal("static image noise triggered storage")
 	}
 }
 

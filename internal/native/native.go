@@ -1,6 +1,11 @@
 package native
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+var ErrBlocked = errors.New("application blocked by privacy policy")
 
 type Environment struct {
 	App            string  `json:"app"`

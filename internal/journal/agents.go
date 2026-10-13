@@ -84,19 +84,19 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
-// Images and prompts are private temporary inputs. No shell is used; each
-// child gets its own process group so timeout/stop also kills descendants.
-func runAgent(ctx context.Context, name, path, dir string, b Batch, images []string, timeout int) ([]byte, error) {
+// Images and prompts are private temporary inputs. Agent arguments never go
+// through a shell; process groups bound timeout/stop to all descendants.
+func runAgent(ctx context.Context, name, path, dir string, b Batch, images []string, timeout int, inheritLoginEnv bool) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
-	meta, _ := json.Marshal(b)
-	prompt := analysisInstructions + "\n不要调用任何工具，仅根据附图返回 JSON。\n" + string(meta)
+	meta := inputMetadata(b)
+	prompt := instructionsForBatch(b) + "\n不要调用任何工具，仅根据附图返回 JSON。\n" + string(meta)
 	var args []string
 	var input []byte
 	switch name {
 	case "codex":
 		schema := filepath.Join(dir, "schema.json")
-		if err := os.WriteFile(schema, []byte(reportSchema), 0600); err != nil {
+		if err := os.WriteFile(schema, []byte(schemaForBatch(b)), 0600); err != nil {
 			return nil, err
 		}
 		args = []string{"exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--disable", "shell_tool", "--disable", "unified_exec", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use", "--disable", "multi_agent", "--disable", "code_mode_host", "--config", "mcp_servers={}", "--output-schema", schema, "--output-last-message", filepath.Join(dir, "result.json"), "--color", "never"}
@@ -132,7 +132,11 @@ func runAgent(ctx context.Context, name, path, dir string, b Batch, images []str
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = dir
 	home, _ := os.UserHomeDir()
-	cmd.Env = append(os.Environ(), "PATH="+os.Getenv("PATH")+":"+filepath.Join(home, ".local", "bin")+":"+filepath.Join(home, ".bun", "bin")+":/opt/homebrew/bin:/usr/local/bin")
+	env := os.Environ()
+	if inheritLoginEnv {
+		env = loginAgentEnvironment(ctx, name, env)
+	}
+	cmd.Env = append(env, "PATH="+os.Getenv("PATH")+":"+filepath.Join(home, ".local", "bin")+":"+filepath.Join(home, ".bun", "bin")+":/opt/homebrew/bin:/usr/local/bin")
 	cmd.Stdin = bytes.NewReader(input)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
@@ -194,7 +198,7 @@ func (s *Store) AnalyzeAgent(ctx context.Context, id string, c Config, selected 
 		return errors.New("another analysis is running")
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	b, err := s.Batch(id)
+	b, err := s.PrepareAnalysis(id)
 	if err != nil {
 		return err
 	}
@@ -219,6 +223,9 @@ func (s *Store) AnalyzeAgent(ctx context.Context, id string, c Config, selected 
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
+			return err
+		}
+		if err = checkFrameDigest(f, data); err != nil {
 			return err
 		}
 		total += len(data)
@@ -249,13 +256,10 @@ func (s *Store) AnalyzeAgent(ctx context.Context, id string, c Config, selected 
 			return err
 		}
 		attempted = true
-		data, callErr := runAgent(ctx, name, info.Path, dir, b, images, c.Agent.TimeoutSeconds)
+		data, callErr := runAgent(ctx, name, info.Path, dir, b, images, c.Agent.TimeoutSeconds, c.Agent.InheritLoginEnv)
 		if callErr == nil {
-			report, decodeErr := parseAgentReport(data)
-			if decodeErr == nil && report.BatchID == id {
-				if err = s.Commit(report, "agent:"+name); err == nil {
-					return nil
-				}
+			if err = s.CommitAnalysis(id, data, "agent:"+name, ""); err == nil {
+				return nil
 			}
 		}
 		_ = s.Failed(id, "agent_failed:"+name)

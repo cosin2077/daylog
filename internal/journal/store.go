@@ -1,6 +1,8 @@
 package journal
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +41,13 @@ func Open(root string) (*Store, error) {
 	for _, sub := range []string{"frames", "batches", "archive", "reports", "usage"} {
 		if err = os.MkdirAll(filepath.Join(root, sub), 0700); err != nil {
 			return nil, err
+		}
+		info, err := os.Lstat(filepath.Join(root, sub))
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			return nil, errors.New("storage directories must not be symlinks")
 		}
 	}
 	return &Store{Root: root}, nil
@@ -129,8 +138,23 @@ func (s *Store) Init() error {
 }
 
 func (s *Store) FramePath(f Frame) (string, error) {
-	if !validID.MatchString(f.ID) || f.File != "frames/"+f.ID+".jpg" {
+	parts := strings.Split(f.File, "/")
+	valid := len(parts) == 2 && parts[0] == "frames" && parts[1] == f.ID+".jpg"
+	if len(parts) == 3 && parts[0] == "frames" && parts[2] == f.ID+".jpg" {
+		day, err := time.Parse("2006-01-02", parts[1])
+		valid = err == nil && day.Format("2006-01-02") == parts[1]
+	}
+	if !validID.MatchString(f.ID) || !valid {
 		return "", errors.New("invalid frame reference")
+	}
+	for _, dir := range []string{filepath.Join(s.Root, "frames"), filepath.Dir(filepath.Join(s.Root, filepath.FromSlash(f.File)))} {
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return "", err
+		}
+		if !info.IsDir() {
+			return "", errors.New("frame directory must not be a symlink")
+		}
 	}
 	p := filepath.Join(s.Root, filepath.FromSlash(f.File))
 	info, err := os.Lstat(p)
@@ -144,12 +168,36 @@ func (s *Store) FramePath(f Frame) (string, error) {
 }
 
 func (s *Store) SaveFrame(now time.Time, app string, data []byte, c Config) (Frame, error) {
-	f := Frame{ID: ID(now), At: now.UTC(), App: app}
-	f.File = "frames/" + f.ID + ".jpg"
+	digest := sha256.Sum256(data)
+	f := Frame{ID: ID(now), At: now.UTC(), App: app, SHA256: hex.EncodeToString(digest[:])}
+	f.File = "frames/" + now.Local().Format("2006-01-02") + "/" + f.ID + ".jpg"
 	if len(data) == 0 || len(data) > 2<<20 {
 		return f, errors.New("capture must be <=2 MiB")
 	}
 	err := s.locked(func() error {
+		base, err := os.Lstat(filepath.Join(s.Root, "frames"))
+		if err != nil {
+			return err
+		}
+		if !base.IsDir() {
+			return errors.New("frame directory must not be a symlink")
+		}
+		if _, err := os.Lstat(filepath.Join(s.Root, "frames", f.ID+".jpg")); err == nil {
+			return errors.New("capture timestamp already exists in legacy storage")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		dir := filepath.Dir(filepath.Join(s.Root, filepath.FromSlash(f.File)))
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return err
+		}
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return errors.New("frame directory must not be a symlink")
+		}
 		if _, err := os.Stat(filepath.Join(s.Root, filepath.FromSlash(f.File))); err == nil {
 			return errors.New("capture timestamp already exists")
 		}
@@ -166,19 +214,41 @@ func (s *Store) SaveFrame(now time.Time, app string, data []byte, c Config) (Fra
 }
 
 func (s *Store) RawBytes() (int64, error) {
-	entries, err := os.ReadDir(filepath.Join(s.Root, "frames"))
+	files, err := s.frameFiles()
 	if err != nil {
 		return 0, err
 	}
 	var size int64
-	for _, entry := range entries {
-		info, err := entry.Info()
+	for _, path := range files {
+		info, err := os.Lstat(path)
 		if err != nil {
 			return 0, err
 		}
 		size += info.Size()
 	}
 	return size, nil
+}
+
+// Walk dated folders and the legacy flat layout without following symlinks.
+func (s *Store) frameFiles() ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(filepath.Join(s.Root, "frames"), func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return errors.New("symlink in frame storage")
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return errors.New("non-regular file in frame storage")
+		}
+		files = append(files, path)
+		return nil
+	})
+	return files, err
 }
 
 func (s *Store) SaveDraft(b Batch) error {
@@ -211,6 +281,13 @@ func (s *Store) SealDraft(b Batch, c Config) error {
 			return ErrQueueFull
 		}
 		selected := SelectFrames(b.Frames, c.MaxImages)
+		if b.SchemaVersion == 2 {
+			if err := validateObservations(b); err != nil {
+				return err
+			}
+			selected = SelectKeyFrames(b.Frames, c.TargetImages, c.MaxImages)
+			b.OmittedFrames = len(b.Frames) - len(selected)
+		}
 		b.Frames = selected
 		if err = WriteJSON(path, b); err != nil {
 			return err
@@ -304,6 +381,9 @@ func (s *Store) Commit(r Report, source string) error {
 		if err != nil {
 			return err
 		}
+		if b.SchemaVersion == 2 || r.SchemaVersion == 2 {
+			return errors.New("v2 batches require evidence-only interpretation via CommitAnalysis")
+		}
 		if err = ValidateReport(b, r); err != nil {
 			return err
 		}
@@ -311,6 +391,11 @@ func (s *Store) Commit(r Report, source string) error {
 		if _, err = os.Stat(path); err == nil {
 			return errors.New("batch already has a report; refusing overwrite")
 		}
+		// Legacy output cannot claim v2-derived metadata or inject task context.
+		for i, c := range r.Cards {
+			r.Cards[i] = Card{Start: c.Start, End: c.End, Title: c.Title, Summary: c.Summary, Category: c.Category, Evidence: c.Evidence}
+		}
+		r = Report{BatchID: r.BatchID, Cards: r.Cards}
 		r.Source = source
 		r.CreatedAt = time.Now().UTC()
 		if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -348,13 +433,22 @@ func (s *Store) Reports(start, end time.Time) ([]Report, error) {
 					cards = append(cards, card)
 				}
 			}
-			if len(cards) > 0 {
+			if len(cards) > 0 || (r.SchemaVersion == 2 && r.Start.Before(end) && r.End.After(start)) {
 				r.Cards = cards
 				out = append(out, r)
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Cards[0].Start.Before(out[j].Cards[0].Start) })
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i].Start, out[j].Start
+		if len(out[i].Cards) > 0 {
+			a = out[i].Cards[0].Start
+		}
+		if len(out[j].Cards) > 0 {
+			b = out[j].Cards[0].Start
+		}
+		return a.Before(b)
+	})
 	return out, nil
 }
 
@@ -408,7 +502,7 @@ func (s *Store) Cleanup(c Config, now time.Time) error {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		entries, err := os.ReadDir(filepath.Join(s.Root, "frames"))
+		files, err := s.frameFiles()
 		if err != nil {
 			return err
 		}
@@ -457,24 +551,61 @@ func (s *Store) Cleanup(c Config, now time.Time) error {
 				}
 			}
 		}
-		for _, entry := range entries {
-			id := strings.TrimSuffix(entry.Name(), ".jpg")
+		for _, path := range files {
+			id := strings.TrimSuffix(filepath.Base(path), ".jpg")
 			if protected[id] {
 				continue
 			}
-			info, err := entry.Info()
+			info, err := os.Lstat(path)
 			if err != nil {
 				return err
 			}
 			// Keep processed evidence for the configured retention; remove only
 			// abandoned/unselected frames immediately, after a crash grace period.
 			if info.ModTime().Before(cutoff) || (!owned[id] && now.Sub(info.ModTime()) > time.Minute) {
-				if err = os.Remove(filepath.Join(s.Root, "frames", entry.Name())); err != nil {
+				if err = os.Remove(path); err != nil {
 					return err
 				}
 			}
 		}
+		// Only remove empty date folders. Pending evidence keeps its directory.
+		dateDirs, err := os.ReadDir(filepath.Join(s.Root, "frames"))
+		if err != nil {
+			return err
+		}
+		for _, dir := range dateDirs {
+			if !dir.IsDir() {
+				continue
+			}
+			if _, err := time.Parse("2006-01-02", dir.Name()); err == nil {
+				_ = os.Remove(filepath.Join(s.Root, "frames", dir.Name()))
+			}
+		}
+		observationDir := filepath.Join(s.Root, "observations")
+		entries, readErr := os.ReadDir(observationDir)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return readErr
+		}
+		observationCutoff := now.Local().AddDate(0, 0, -c.ReportRetentionDays).Format("2006-01-02")
+		for _, entry := range entries {
+			if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".jsonl") {
+				day := strings.TrimSuffix(entry.Name(), ".jsonl")
+				if _, err := time.Parse("2006-01-02", day); err == nil && day < observationCutoff {
+					if err = os.Remove(filepath.Join(observationDir, entry.Name())); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		textCutoff := now.UTC().AddDate(0, 0, -c.ReportRetentionDays).Format("20060102")
+		cachedHTML := filepath.Join(s.Root, "reports", "report.html")
+		if info, err := os.Lstat(cachedHTML); err == nil && info.ModTime().Before(now.AddDate(0, 0, -c.ReportRetentionDays)) {
+			if err = os.Remove(cachedHTML); err != nil {
+				return err
+			}
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 		for _, sub := range []string{"reports", "archive"} {
 			items, err := os.ReadDir(filepath.Join(s.Root, sub))
 			if err != nil {
@@ -513,16 +644,22 @@ func (s *Store) reserveAttempt(id string, c Config, now time.Time, withinFallbac
 		}
 		day := now.Local().Format("2006-01-02")
 		path := filepath.Join(s.Root, "usage", day+".json")
-		var usage struct {
-			Requests int `json:"requests"`
-		}
+		var usage DailyUsage
 		if err = ReadJSON(path, &usage); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		if usage.Requests >= c.AI.MaxRequestsPerDay {
 			return errors.New("daily API request budget reached")
 		}
+		if usage.SubmittedImages+len(b.Frames) > c.MaxImagesPerDay {
+			return errors.New("daily image budget reached")
+		}
+		if usage.KnownUsageCalls+usage.UnknownUsageCalls < usage.Requests {
+			usage.UnknownUsageCalls = usage.Requests - usage.KnownUsageCalls
+		}
 		usage.Requests++
+		usage.SubmittedImages += len(b.Frames)
+		usage.UnknownUsageCalls++
 		if err = WriteJSON(path, usage); err != nil {
 			return err
 		}

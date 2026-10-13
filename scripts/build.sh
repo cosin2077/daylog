@@ -3,7 +3,7 @@ set -eu
 daylog_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$daylog_root"
 [ "$(uname -s)" = Darwin ] || { echo 'Native build requires macOS and Xcode Command Line Tools.' >&2; exit 1; }
-daylog_version=${DAYLOG_VERSION:-0.1.0}
+daylog_version=${DAYLOG_VERSION:-0.4.0}
 case "$daylog_version" in *[!0-9.]*|'') echo 'DAYLOG_VERSION must be numeric major.minor.patch.' >&2; exit 1;; esac
 daylog_host=$(go env GOARCH)
 daylog_arches=$daylog_host
@@ -21,6 +21,7 @@ for daylog_arch in $daylog_arches; do
 <key>CFBundleIdentifier</key><string>io.daylog.agent</string>
 <key>CFBundleName</key><string>Daylog</string>
 <key>CFBundleExecutable</key><string>daylog</string>
+<key>CFBundleIconFile</key><string>Daylog</string>
 <key>CFBundleShortVersionString</key><string>$daylog_version</string>
 <key>CFBundleVersion</key><string>$daylog_version</string>
 <key>CFBundlePackageType</key><string>APPL</string>
@@ -30,6 +31,7 @@ for daylog_arch in $daylog_arches; do
 </dict></plist>
 PLIST
   cp LICENSE "$daylog_app/Contents/Resources/LICENSE"
+  cp assets/icon/Daylog.icns "$daylog_app/Contents/Resources/Daylog.icns"
   /usr/bin/codesign --force --sign - "$daylog_app"
   /usr/bin/codesign --verify --deep --strict "$daylog_app"
   /usr/bin/plutil -lint "$daylog_app/Contents/Info.plist"

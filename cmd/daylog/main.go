@@ -20,18 +20,34 @@ import (
 	"daylog/internal/update"
 )
 
-var version = "0.1.0"
+var version = "0.4.0"
 
-const help = `Daylog — macOS 低占用工作日记
+const help = `Daylog — 自动记录今天做了什么
+
+  daylog start    开始记录，自动准备环境；首次按系统提示授权
+  daylog today    查看今天的日记
+  daylog report   打开日／周／月可视化报告
+  daylog status   查看运行状态、采集数量和待整理记录
+  daylog stop     停止记录
+  daylog config   查看或配置模型（可选，使用 config -h 查看方法）
+  daylog update   更新版本
+  daylog -h       显示帮助（直接运行 daylog 也可以）
+
+配置、截图和日记都在 ~/.daylog。
+自动使用本机 Agent 的模型配置，分析时可能调用云端服务。
+更多设置与排障：daylog help --advanced
+`
+
+const advancedHelp = `Daylog — 高级操作
 
 daylog [--data 私有目录] <命令>
   init                       创建配置，不启动记录
-  config [--file 文件或-]     查看/替换配置；运行中修改后须重启
+  config [选项]              查看/修改配置；config -h 显示模型配置方法
   doctor                     检查电源、温度与屏幕权限，不截图
   permission                 请求系统屏幕录制权限
   windows                    列出可捕获窗口 ID（标题可能敏感）
   run [--fixture JPEG]       前台运行；fixture 用于隔离验证
-  status                     查询正在运行的后台状态
+  status [--json]             查看中文状态概览；--json 供 Agent / 脚本使用
   stop | pause [--minutes N] | resume
   pending [--limit N]        待分析批次与本地图片路径
   commit --file 文件或-      导入 Agent 生成的证据化记录
@@ -39,6 +55,9 @@ daylog [--data 私有目录] <命令>
   agents                     检测本机 Agent 及适配状态
   update [--source 地址或文件] [--check] [--remember]  自更新
   today [--date YYYY-MM-DD] [--json]      查看日记
+  report [--period day|week|month] [--date YYYY-MM-DD] [--no-open] [--json]
+                             生成日／周／月报告；默认打开离线 HTML
+  prompt                     查看截图分析使用的提示词
   auth set --stdin | auth delete         系统钥匙串凭据，只写不读
   service install [--login] [--dry-run]   安装 LaunchAgent，不立即启动
   service start | stop | uninstall
@@ -66,6 +85,7 @@ func execute(args []string) error {
 		return err
 	}
 	filtered := []string{}
+	customRoot := false
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--data" {
 			i++
@@ -73,64 +93,97 @@ func execute(args []string) error {
 				return errors.New("--data needs a directory")
 			}
 			root = args[i]
+			customRoot = true
 		} else {
 			filtered = append(filtered, args[i])
 		}
 	}
 	args = filtered
-	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Print(help)
+	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+		if len(args) > 1 && args[1] == "--advanced" {
+			fmt.Print(advancedHelp)
+		} else {
+			fmt.Print(help)
+		}
+		return nil
+	}
+	if args[0] == "config" && len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
+		fmt.Print(configHelp)
+		return nil
+	}
+	if args[0] == "report" && len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
+		fmt.Print(reportHelp)
 		return nil
 	}
 	if args[0] == "version" || args[0] == "--version" {
 		return output(map[string]string{"version": version})
 	}
+	if args[0] == "prompt" {
+		fmt.Print(journal.AnalysisPrompt())
+		return nil
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if !customRoot {
+		if err = migrateDefaultData(ctx, root, args[0]); err != nil {
+			return err
+		}
+	}
 	s, err := journal.Open(root)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	if err = s.Init(); err != nil {
+		return err
+	}
+	if handled, nativeErr := nativeCommand(ctx, s.Root, args); handled {
+		return nativeErr
+	}
 	switch args[0] {
+	case "report":
+		return reportCommand(ctx, s, args[1:])
+	case "start":
+		f := flags("start")
+		login := f.Bool("login", false, "also start after login")
+		asJSON := f.Bool("json", false, "JSON output")
+		if err = f.Parse(args[1:]); err != nil {
+			return err
+		}
+		if f.NArg() != 0 {
+			return errors.New("用法：daylog start")
+		}
+		return startRecording(ctx, s, *login, *asJSON)
+	case "stop":
+		f := flags("stop")
+		asJSON := f.Bool("json", false, "JSON output")
+		if err = f.Parse(args[1:]); err != nil {
+			return err
+		}
+		if f.NArg() != 0 {
+			return errors.New("用法：daylog stop")
+		}
+		if err = stopRuntime(ctx, s.Root); err != nil {
+			return err
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		if err = removeServiceFile(home, s.Root); err != nil {
+			return err
+		}
+		if *asJSON {
+			return output(map[string]string{"state": "stopped"})
+		}
+		fmt.Println("已停止记录。再次开始：daylog start")
+		return nil
 	case "init":
 		if err = s.Init(); err != nil {
 			return err
 		}
 		return output(map[string]string{"config": filepath.Join(s.Root, "config.json"), "state": "initialized_not_running"})
 	case "config":
-		f := flags("config")
-		file := f.String("file", "", "JSON file or stdin")
-		if err = f.Parse(args[1:]); err != nil {
-			return err
-		}
-		if *file != "" {
-			input, closeFn, err := readInput(*file)
-			if err != nil {
-				return err
-			}
-			defer closeFn()
-			c := journal.DefaultConfig()
-			decoder := json.NewDecoder(io.LimitReader(input, 65536))
-			decoder.DisallowUnknownFields()
-			if err = decoder.Decode(&c); err != nil {
-				return errors.New("invalid configuration JSON")
-			}
-			var trailing any
-			if decoder.Decode(&trailing) != io.EOF {
-				return errors.New("configuration contains trailing content")
-			}
-			if err = c.Validate(); err != nil {
-				return err
-			}
-			if err = journal.WriteJSON(filepath.Join(s.Root, "config.json"), c); err != nil {
-				return err
-			}
-		}
-		c, err := journal.ReadConfig(s.Root)
-		if err != nil {
-			return err
-		}
-		return output(c)
+		return configure(s, args[1:], os.Stdin, os.Stdout, native.SetSecret)
 	case "doctor":
 		env, err := (native.Mac{}).Environment(ctx)
 		if err != nil {
@@ -154,6 +207,7 @@ func execute(args []string) error {
 		checkOnly := f.Bool("check", false, "only inspect")
 		remember := f.Bool("remember", false, "remember this update source")
 		force := f.Bool("force", false, "explicitly reinstall this version")
+		asJSON := f.Bool("json", false, "JSON output")
 		if err = f.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -178,7 +232,15 @@ func execute(args []string) error {
 			}
 		}
 		if *checkOnly || !check.Upgrade && !*force {
-			return output(check)
+			if *asJSON {
+				return output(check)
+			}
+			if check.Upgrade {
+				fmt.Printf("可更新至 %s，运行 daylog update 安装。\n", check.Available)
+			} else {
+				fmt.Printf("已是当前可用版本 %s。\n", version)
+			}
+			return nil
 		}
 		exe, err := os.Executable()
 		if err != nil {
@@ -223,7 +285,14 @@ func execute(args []string) error {
 			}
 			restarted = true
 		}
-		return output(map[string]any{"state": "updated", "version": check.Available, "restarted": restarted, "manual_restart_needed": wasRunning && !wasService})
+		if *asJSON {
+			return output(map[string]any{"state": "updated", "version": check.Available, "restarted": restarted, "manual_restart_needed": wasRunning && !wasService})
+		}
+		fmt.Printf("已更新至 %s。\n", check.Available)
+		if wasRunning {
+			fmt.Println("更新后如需确认录屏授权，运行 daylog start。")
+		}
+		return nil
 	case "run":
 		f := flags("run")
 		fixture := f.String("fixture", "", "synthetic JPEG fixture")
@@ -252,7 +321,9 @@ func execute(args []string) error {
 		_ = syscall.Setpriority(syscall.PRIO_PROCESS, 0, 10)
 		r := journal.Runner{Store: s, Config: c, Source: source, Key: func() string { return apiKey(c) }}
 		return r.Run(ctx)
-	case "status", "stop", "resume", "pause":
+	case "status":
+		return statusCommand(s, args[1:])
+	case "resume", "pause":
 		f := flags(args[0])
 		minutes := f.Int("minutes", 30, "pause duration, 0 means indefinite")
 		if err = f.Parse(args[1:]); err != nil {
@@ -281,6 +352,10 @@ func execute(args []string) error {
 		}
 		out := []map[string]any{}
 		for _, b := range batches {
+			b, err = s.PrepareAnalysis(b.ID)
+			if err != nil {
+				return err
+			}
 			paths := []string{}
 			for _, frame := range b.Frames {
 				path, err := s.FramePath(frame)
@@ -303,20 +378,21 @@ func execute(args []string) error {
 			return err
 		}
 		defer closeFn()
-		var report journal.Report
-		decoder := json.NewDecoder(io.LimitReader(input, 2<<20))
-		decoder.DisallowUnknownFields()
-		if err = decoder.Decode(&report); err != nil {
-			return errors.New("invalid report JSON")
+		data, err := io.ReadAll(io.LimitReader(input, (1<<20)+1))
+		if err != nil || len(data) > 1<<20 {
+			return errors.New("invalid analysis size")
 		}
-		var extra any
-		if decoder.Decode(&extra) != io.EOF {
-			return errors.New("report contains trailing content")
+		var identity struct {
+			BatchID string `json:"batch_id"`
 		}
-		if err = s.Commit(report, "agent"); err != nil {
+		if json.Unmarshal(data, &identity) != nil {
+			return errors.New("invalid analysis JSON")
+		}
+		if err = s.CommitAnalysis(identity.BatchID, data, "agent", ""); err != nil {
 			return err
 		}
-		return output(map[string]string{"batch_id": report.BatchID, "state": "committed"})
+		return output(map[string]string{"batch_id": identity.BatchID, "state": "committed"})
+
 	case "analyze":
 		f := flags("analyze")
 		id := f.String("batch", "", "batch ID")
@@ -387,14 +463,28 @@ func execute(args []string) error {
 		fmt.Printf("# %s\n\n", *date)
 		for _, r := range reports {
 			for _, card := range r.Cards {
-				fmt.Printf("- %s–%s **%s**：%s\n", card.Start.Local().Format("15:04"), card.End.Local().Format("15:04"), card.Title, card.Summary)
+				fmt.Printf("- %s–%s **%s**：%s", card.Start.Local().Format("15:04"), card.End.Local().Format("15:04"), card.Title, card.Summary)
+				if card.DurationMethod != "" {
+					fmt.Printf("（观察估计约 %d 分钟）", card.EstimatedSeconds/60)
+				}
+				fmt.Println()
 			}
 		}
 		if len(reports) == 0 {
-			fmt.Println("暂无已分析记录。")
+			if status, err := journal.SendControl(s.Root, journal.Control{Op: "status"}); err == nil {
+				if status.Paused {
+					fmt.Println("记录已暂停；运行 daylog start 继续。")
+				} else if status.Error != "" {
+					fmt.Println(recordingReason(status.Error))
+				} else {
+					fmt.Println("正在记录，整理完成后会显示今天的日记。")
+				}
+			} else {
+				fmt.Println("还没有日记。运行 daylog start 开始记录。")
+			}
 		}
 		if count > 0 {
-			fmt.Printf("\n还有 %d 批待分析；以上记录不完整。\n", count)
+			fmt.Printf("\n还有 %d 段活动尚未整理，日记暂不完整。\n", count)
 		}
 		return nil
 	case "auth":
@@ -439,6 +529,10 @@ func execute(args []string) error {
 			if err != nil {
 				return err
 			}
+			exe, err = filepath.EvalSymlinks(exe)
+			if err != nil {
+				return err
+			}
 			if *dry {
 				_, err = os.Stdout.Write(service.Plist(exe, s.Root, *login))
 				return err
@@ -478,6 +572,9 @@ func readInput(path string) (io.Reader, func(), error) {
 	return f, func() { f.Close() }, nil
 }
 func apiKey(c journal.Config) string {
+	if c.AI.APIKey != "" {
+		return c.AI.APIKey
+	}
 	if c.AI.KeyEnv != "" {
 		if value := os.Getenv(c.AI.KeyEnv); value != "" {
 			return value

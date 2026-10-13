@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Daylog — daylight and a journal</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.85" y2="1">
+      <stop stop-color="#47745d"/>
+      <stop offset="1" stop-color="#254536"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#f3cf88"/>
+      <stop offset="1" stop-color="#e7ab65"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="72" width="896" height="896" rx="202" fill="#182d23" opacity="0.14"/>
+  <rect x="64" y="64" width="896" height="896" rx="202" fill="url(#tile)"/>
+  <rect x="65" y="65" width="894" height="894" rx="201" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="2"/>
+  <path d="M 356 458 A 156 156 0 0 1 668 458 Z" fill="url(#sun)"/>
+  <rect x="244" y="458" width="536" height="52" rx="26" fill="#f7f5ef"/>
+  <rect x="244" y="584" width="412" height="52" rx="26" fill="#f7f5ef"/>
+  <rect x="244" y="710" width="292" height="52" rx="26" fill="#f7f5ef"/>
+</svg>

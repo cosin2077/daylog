@@ -51,6 +51,9 @@ func (Mac) Capture(ctx context.Context, opts CaptureOptions) ([]byte, error) {
 		defer C.free(p)
 	}
 	if result != 0 {
+		if result == 4 {
+			return nil, ErrBlocked
+		}
 		messages := map[int]string{1: "screen recording permission required", 2: "screen capture timed out", 3: "screen capture failed", 4: "foreground app blocked", 5: "screen unavailable"}
 		message := messages[int(result)]
 		if message == "" {

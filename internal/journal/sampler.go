@@ -7,6 +7,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"math"
+	"sort"
 	"time"
 )
 
@@ -66,6 +67,99 @@ func SelectFrames(frames []Frame, n int) []Frame {
 	for i := range out {
 		index := int(math.Round(float64(i) * float64(len(frames)-1) / float64(n-1)))
 		out[i] = frames[index]
+	}
+	return out
+}
+
+// Local changes can be significant even when the entire screen is nearly static.
+func VisualChanged(c Config, current, previous Fingerprint) bool {
+	if Difference(current, previous) >= c.ChangeThreshold {
+		return true
+	}
+	for by := 0; by < 18; by += 3 {
+		for bx := 0; bx < 32; bx += 4 {
+			var sum float64
+			for y := by; y < by+3; y++ {
+				for x := bx; x < bx+4; x++ {
+					for k := 0; k < 3; k++ {
+						i := (y*32+x)*3 + k
+						sum += math.Abs(float64(current[i]) - float64(previous[i]))
+					}
+				}
+			}
+			if sum/(36*255) >= math.Max(0.08, c.ChangeThreshold*8) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Preserve app boundaries before filling temporal gaps. Rank is deterministic;
+// video-like high novelty cannot consume every slot ahead of a brief app switch.
+func SelectKeyFrames(frames []Frame, target, limit int) []Frame {
+	if target > limit {
+		target = limit
+	}
+	if target < 1 {
+		target = 1
+	}
+	if len(frames) <= target {
+		return append([]Frame(nil), frames...)
+	}
+	boundary := 0
+	for i := 1; i < len(frames); i++ {
+		if frames[i].App != frames[i-1].App {
+			boundary++
+		}
+	}
+	n := target
+	if boundary+2 > n {
+		n = boundary + 2
+	}
+	if n > limit {
+		n = limit
+	}
+	if n > len(frames) {
+		n = len(frames)
+	}
+	chosen := map[int]bool{0: true}
+	if n > 1 {
+		chosen[len(frames)-1] = true
+	}
+	for len(chosen) < n {
+		best := -1
+		score := -1.0
+		for i, f := range frames {
+			if chosen[i] {
+				continue
+			}
+			distance := float64(len(frames))
+			for j := range chosen {
+				d := math.Abs(float64(i - j))
+				if d < distance {
+					distance = d
+				}
+			}
+			priority := distance/float64(len(frames)) + math.Min(f.Change, 1)*0.25
+			if i > 0 && frames[i-1].App != f.App {
+				priority += 2
+			}
+			if priority > score {
+				best = i
+				score = priority
+			}
+		}
+		chosen[best] = true
+	}
+	indexes := make([]int, 0, n)
+	for i := range chosen {
+		indexes = append(indexes, i)
+	}
+	sort.Ints(indexes)
+	out := make([]Frame, 0, n)
+	for _, i := range indexes {
+		out = append(out, frames[i])
 	}
 	return out
 }
