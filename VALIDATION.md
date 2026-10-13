@@ -113,3 +113,18 @@
 - 最终版本正常复测在 `doctor` 阶段遇到 `native App launch failed or timed out`，未进入录屏测试。没有绕过系统权限。使用明确的 `--skip-native-check` 完成其余隔离验证：0.4.0 安装、重复安装、帮助无副作用、配置/档位、单实例、暂停/恢复/停止、v2 入库、日周月和任意时段 JSON/HTML、私有文件权限、更新替换、skill 复制全部通过。LaunchAgent 仅验证 plist，未加载测试登录服务。
 - 最终合成画面后台短样本 RSS 为 20,080 KiB（约 19.6 MiB），nice +10，五次 `ps` CPU 快照均为 0.0%。这不是原生截图、长时平均、峰值或续航测试；不包含真实 Agent 子进程开销。
 - 本轮未替换 `~/Applications/Daylog.app`，未迁移用户真实数据；测试只用独立临时安装和目录。测试进程、临时安装、合成图和日记均已清理。真实 v2 视觉质量、原生启动/授权、Intel 实机和电池续航仍待验证。
+
+## 2026-10-13 GitHub 构建与 Agent 在线安装
+
+- 新增 CI / Release workflow，经 actionlint v1.7.12 检查通过；使用已核对的官方 action commit SHA。CI 配置为 macos-15（arm64）和 macos-15-intel；Release 从数字版本标签生成双架构附件和草稿。本轮没有推送或触发 GitHub Actions，因此云端 runner 的实际执行尚未验证。
+- 本地 `go test ./...`、双架构构建和 `scripts/verify-runtime.py --skip-native-check` 通过。原生录屏/模型调用不在本轮范围。
+- `scripts/verify-installer.py` 通过本地 HTTP feed 实际验证：仅下载本机架构、登记长期更新源、重复安装保留配置、不自动启动记录、错误哈希/路径穿越/符号链接包拒绝、缺少 Release 的提示、无二进制源码 skill 的三种 Agent 目录安装。临时 HTTP 服务、安装和数据已清理。
+- 从双架构构建切回单架构后，检查旧架构包已清除、manifest 仅包含本轮架构；Release 打包拒绝不完整的双架构输入。随后重新构建双架构。
+- `dist/release/` 的版本固定 URL、App 包哈希、全附件 checksums 和轻量 skill 内容已核验；本地 offline manifest 保持相对路径。公开 Release 尚未创建，GitHub 公网安装/下载与干净 Mac 的 Gatekeeper/公证行为仍未验证。
+
+## 2026-10-13 CLI 默认人类可读输出
+
+- 结果命令默认中文概览/确认消息，显式 --json 保留结构化输出；包括版本、初始化、配置、诊断、权限、窗口、Agent、控制、待处理、分析/提交、凭据和服务管理。report 保留 HTML 默认，service install --dry-run 保留显式 plist 导出。
+- config 默认隐藏密钥；config --json 仍是完整配置。启动内部的 doctor/permission 调用显式传 --json，避免格式改变破坏授权检查。同步 skill 和安装/运行验证脚本的 JSON 调用。
+- cmd/daylog 回归和 race 检查、go vet、双架构构建通过。测试覆盖默认查询非 JSON、显式 JSON 可解析、配置密钥不意外显示、诊断状态说明和窗口标题控制字符处理。
+- 打包后的隔离 runtime 验证通过，覆盖默认查询、暂停/恢复、pending/commit 和显式 JSON 日记读取；HTTP 安装验证通过。发布附件已重新生成，临时进程及数据已清理。本轮没有替换用户安装版，也未实测原生录屏/权限提示或写入真实钥匙串。

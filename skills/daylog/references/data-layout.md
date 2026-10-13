@@ -11,7 +11,7 @@ Use this reference when answering questions about recorded activity, time spent,
 | This week's / month's work | `daylog report --period week --json` / `--period month --json` |
 | Visual report | `daylog report --no-open` |
 | Recording status | `daylog status --json` |
-| Analyze unprocessed images, when requested | `daylog pending --limit 1` then follow `report-format.md` |
+| Analyze unprocessed images, when requested | `daylog pending --limit 1 --json` then follow `report-format.md` |
 
 If not on PATH, use `~/.local/bin/daylog`. Reading reports does not start capture or invoke the configured analysis provider. The agent answering the user still processes the returned text through its own provider. Use `daylog report --from RFC3339 --to RFC3339 --json` for an arbitrary range up to 366 days; both timestamps must include an offset. Do not combine these flags with date/period. Without --json, it generates a range HTML report. Prefer period JSON because it clips cards and exposes draft/failed counts. Do not use raw `today` batch counts to claim every card belongs entirely inside the requested day.
 

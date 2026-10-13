@@ -12,8 +12,8 @@ parser.add_argument('--source', type=Path, default=Path(__file__).resolve().pare
 args = parser.parse_args()
 paths = {'codex': '.agents/skills', 'claude': '.claude/skills', 'hermes': '.hermes/skills'}
 chosen = list(paths) if args.agent == 'all' else [args.agent]
-if not (args.source / 'SKILL.md').is_file() or not (args.source / 'assets/checksums.txt').is_file():
-    parser.error('build the self-contained skill first with scripts/build.sh')
+if not (args.source / 'SKILL.md').is_file() or not (args.source / 'scripts/install-runtime.sh').is_file():
+    parser.error('source must contain the Daylog skill and installer')
 targets = [args.home / paths[agent] / 'daylog' for agent in chosen]
 for target in targets:
     if target.exists() or target.is_symlink():

@@ -1,6 +1,6 @@
 # Agent report format
 
-Read `batch.schema_version` from `daylog pending`. New batches use v2; older batches without that field still use the legacy format below. Never submit a stored report back as model output.
+Read `batch.schema_version` from `daylog pending --json`. New batches use v2; older batches without that field still use the legacy format below. Never submit a stored report back as model output.
 
 ## v2: interpretation only
 
@@ -30,7 +30,7 @@ The CLI computes time from local observations, preserves unknown intervals and a
 
 ## Legacy batches
 
-Use actual values from `daylog pending`; the following is a schema sketch, not sample data to commit:
+Use actual values from `daylog pending --json`; the following is a schema sketch, not sample data to commit:
 
 ```json
 {

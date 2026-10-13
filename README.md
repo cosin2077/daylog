@@ -16,7 +16,7 @@ daylog stop     # 停止记录
 
 默认使用本机 Claude → Codex → Hermes 的已有模型配置。无需再填 API Key；模型需要支持图片，分析可能使用该 Agent 的云端服务。没有兼容 Agent 或分析失败时，截图保留在本地等待处理。Grok / Antigravity 目前仅检测。
 
-`daylog status` 查看中文状态概览：运行时长、最近截图、采集/跳过次数、待整理批次和截图磁盘占用。时间按本机时区显示；采集计数属于本次启动，待整理和占用包含历史。Agent 或脚本使用 `daylog status --json`。
+`daylog status` 查看中文状态概览：运行时长、最近截图、采集/跳过次数、待整理批次和截图磁盘占用。时间按本机时区显示；采集计数属于本次启动，待整理和占用包含历史。所有结果命令默认显示便于阅读的中文；Agent 或脚本解析结果时统一加 `--json`，例如 `status --json`、`pending --json`、`agents --json`、`version --json`。`config` 默认显示隐藏密钥的配置概览，`config --json` 导出完整配置（可能含明文密钥）。
 
 `daylog`、`daylog -h`、`daylog --help` 都显示帮助，且不会初始化数据或启动记录。`daylog today` 查看日记。首批日记通常约 15 分钟后生成；它反映屏幕活动，不等于精确工时。
 
@@ -31,19 +31,14 @@ daylog stop     # 停止记录
 <details>
 <summary>Agent 安装步骤 / 手动安装</summary>
 
-1. 确认系统为 macOS 14+，获取本仓库。优先使用自带双架构二进制的 [skill 包](dist/daylog-skill-macos.tar.gz)；安装器会自动选择 Apple Silicon 或 Intel，不需要用户判断架构。
-2. 如果源码检出中没有 `skills/daylog/assets` 的二进制包，先检查本机已有的 Go 1.24+ 和 Xcode Command Line Tools，再运行 `sh scripts/build.sh --all-arches`。缺少发行包或构建条件时明确说明，不能把尚未发布的下载地址当作可用资源。
-3. 在仓库目录执行 `python3 scripts/install-skills.py --agent codex`，按当前 Agent 改为 `claude` 或 `hermes`。如果目标 skill 已存在，先比较版本，保留用户修改，避免盲目覆盖。
-4. 从安装后的 skill 目录运行 `sh scripts/install-runtime.sh`，让更新源指向持久保存的 skill 资源。也可从源码目录运行 `sh skills/daylog/scripts/install-runtime.sh`。已有安装由安装器检查更新，保留 `~/.daylog` 中的配置和记录。
-5. 验证 `~/.local/bin/daylog version` 和 `~/.local/bin/daylog -h`，告知用户安装结果。安装到此完成；只有用户要求开始记录时才执行 `daylog start`，系统授权由本人完成。
+1. 确认系统为 macOS 14+。获取本仓库的 `skills/daylog`，或下载 [最新 Release 的轻量 skill 包](https://github.com/cosin2077/daylog/releases/latest/download/daylog-skill.tar.gz)。获取不到时检查 [Releases](https://github.com/cosin2077/daylog/releases)，草稿或预发布不属于默认 latest。尚无正式 Release 时明确告知，不要自动要求用户安装编译工具。
+2. 将 skill 放到当前 Agent 的目录：Codex 为 `~/.agents/skills/daylog`，Claude Code 为 `~/.claude/skills/daylog`，Hermes 为 `~/.hermes/skills/daylog`。源码仓库提供 `python3 scripts/install-skills.py --agent codex`（按当前 Agent 修改）；也可直接复制目录，不要求用户安装 Python。目标已存在时比较并保留用户修改。
+3. 从安装后的 skill 目录执行 `sh scripts/install-runtime.sh`。它读取正式 Release 清单、检测 Apple Silicon / Intel，只下载匹配的二进制包，校验 SHA-256、包路径、App 签名完整性、版本和架构后安装；已有安装通过更新器升级并保留配置和日记。
+4. 验证 `~/.local/bin/daylog version` 和 `~/.local/bin/daylog -h`，告知安装版本。安装到此完成；只有用户要求开始记录时才执行 `daylog start`，macOS 授权由本人完成。
 
-直接使用解压后的 skill 包时，安装命令为：
+应用安装到 `~/Applications/Daylog.app`，命令链接到 `~/.local/bin/daylog`。预编译运行时的安装不需要 Go、Node、Python 或包管理器；skill 安装脚本只是可选便利工具。
 
-```sh
-sh daylog/scripts/install-runtime.sh
-```
-
-应用安装到 `~/Applications/Daylog.app`，命令链接到 `~/.local/bin/daylog`；若终端找不到命令，使用完整路径 `~/.local/bin/daylog`。使用预编译包安装运行时不需要 Go、Node 或 Python。
+维护者离线测试：先运行 `sh scripts/build.sh --all-arches`，再从 skill 目录执行 `sh scripts/install-runtime.sh --source "$PWD/assets/release.json"`。此模式使用本地包和更新源；普通用户保持默认在线方式。
 
 </details>
 
@@ -53,9 +48,9 @@ sh daylog/scripts/install-runtime.sh
 daylog update
 ```
 
-目前更新源是随安装包登记的本地 manifest，尚未发布互联网更新服务。更新已有 SHA-256、签名完整性、版本/架构校验与替换失败回退，但尚不具备正式发行级保障：没有签名清单/固定发布者校验，两个目录重命名之间存在崩溃窗口，更新后启动失败也不会自动回滚。它由命令触发，没有后台定时更新。
+默认更新源是 GitHub 最新正式 Release 的 `release.json`，首次正式 Release 发布后可用。清单中的二进制 URL 固定到版本标签；`--source` 可用于维护者的本地验证。更新已有 SHA-256、签名完整性、版本/架构校验与替换失败回退，但尚不具备正式发行级保障：没有签名清单/固定发布者校验，两个目录重命名之间存在崩溃窗口，更新后启动失败也不会自动回滚。它由命令触发，没有后台定时更新。
 
-本地开发签名更新可能使录屏权限失效；`daylog start` 会检查并引导重新授权。正式签名、公证与远程发布尚待完成。
+本地开发签名更新可能使录屏权限失效；`daylog start` 会检查并引导重新授权。当前 workflow 仍使用开发签名；Developer ID 签名及公证尚待配置。
 
 ## 自定义 LLM（可选）
 
@@ -161,7 +156,7 @@ Go 后台和少量原生代码调用 ScreenCaptureKit，无 WebView、Node 或�
 python3 scripts/install-skills.py --agent all
 ```
 
-脚本只安装 skill 的说明、资源和二进制包；复制 skill 不会直接安装或运行 App。向 Agent 请求安装/使用后，它运行 skill 内的安装器，按 Mac 硬件选择 arm64 或 amd64，无需现场编译。
+脚本复制 skill 的说明和安装器，源码 skill 无需附带二进制；复制 skill 不会直接运行 App。Agent 随后运行安装器，自动下载适配 Mac 的 arm64 或 amd64 包，无需现场编译。
 
 之后直接说“用 Daylog 开始记录”“看看今天做了什么”“停止记录”。Agent 使用同一套简单入口；用户无需理解截图批次或服务管理。
 
@@ -180,3 +175,12 @@ python3 scripts/install-skills.py --agent all
 开发：`go test -race ./...`、`go vet ./...`、`sh scripts/build.sh --all-arches`。实测范围见 [验证记录](VALIDATION.md)。
 
 图标源文件为 [daylog.svg](assets/icon/daylog.svg)，修改后在 macOS 执行 `sh scripts/build-icon.sh`（需要本机 `rsvg-convert`）重新生成 PNG / ICNS。普通构建直接使用仓库内的 ICNS，不增加安装或运行依赖。
+
+## GitHub 自动构建与发布
+
+- PR 和 `main` 推送：在 macOS 15 的 arm64 / Intel runner 上运行测试、构建和隔离安装验证。
+- 推送 `v0.4.0` 这样的数字版本标签：构建双架构包，生成版本固定的更新清单和轻量 skill 包，上传 Actions artifact 并创建 **Release 草稿**。
+- 也可手动运行 “Build release” workflow，传入已经存在的标签。重跑只替换同标签草稿附件；已发布版本拒绝覆盖。
+- 维护者验证后将草稿发布为正式 Release，并设为 Latest，Agent 默认安装及 `daylog update` 才会使用它。CI 不会自动开始用户录屏。
+
+版本标签应指向已提交的发布代码。配置步骤、产物与验证边界见 [发布说明](docs/releasing.md)。

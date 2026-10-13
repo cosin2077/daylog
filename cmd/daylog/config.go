@@ -20,7 +20,9 @@ const configHelp = `Daylog — 配置
   daylog config --profile balanced|battery|detailed
       选择均衡、省电或精细档；不改变模型和隐私设置
   daylog config
-      查看当前配置
+      查看中文配置概览（隐藏密钥内容）
+  daylog config --json
+      导出完整 JSON 配置，可能含明文密钥
   daylog config --endpoint https://api.example.com/v1/chat/completions --model MODEL --api-key KEY
       使用支持图片的 OpenAI-compatible Chat Completions API
   daylog config --api-key KEY
@@ -152,8 +154,12 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 			return err
 		}
 	}
-	if (!edited && !*keyStdin) || *asJSON {
+	if *asJSON {
 		return json.NewEncoder(stdout).Encode(c)
+	}
+	if !edited {
+		writeConfig(stdout, s.Root, c)
+		return nil
 	}
 	if edited {
 		fmt.Fprintln(stdout, "已保存配置："+filepath.Join(s.Root, "config.json"))

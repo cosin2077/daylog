@@ -27,13 +27,18 @@ def run(command, *, timeout=30, expected=0):
     return p.stdout
 
 try:
-    run(['sh', repo / 'skills/daylog/scripts/install-runtime.sh', '--apps-dir', root / 'Applications', '--bin-dir', root / 'bin', '--data-dir', data])
+    run(['sh', repo / 'skills/daylog/scripts/install-runtime.sh', '--apps-dir', root / 'Applications', '--bin-dir', root / 'bin', '--data-dir', data, '--source', repo / 'skills/daylog/assets/release.json'])
     exe = root / 'bin/daylog'
     def cli(*arguments, **kw):
         return run([exe, '--data', data, *arguments], **kw)
-    result['installed_version'] = json.loads(cli('version'))['version']
-    run(['sh', repo / 'skills/daylog/scripts/install-runtime.sh', '--apps-dir', root / 'Applications', '--bin-dir', root / 'bin', '--data-dir', data])
+    result['installed_version'] = json.loads(cli('version', '--json'))['version']
+    run(['sh', repo / 'skills/daylog/scripts/install-runtime.sh', '--apps-dir', root / 'Applications', '--bin-dir', root / 'bin', '--data-dir', data, '--source', repo / 'skills/daylog/assets/release.json'])
     result['repeat_install_safe'] = True
+    assert cli('version').startswith('Daylog ')
+    assert '当前配置' in cli('config')
+    assert '本机 Agent' in cli('agents')
+    assert '没有待整理' in cli('pending')
+    result['default_queries_are_human_readable'] = True
     fresh = root / 'fresh'
     for help_args in ([], ['-h'], ['--help']):
         text = run([exe, '--data', fresh, *help_args])
@@ -43,13 +48,13 @@ try:
     assert 'daylog start' in text and (fresh / 'config.json').is_file() and not (fresh / 'run.sock').exists()
     result['today_initializes_without_recording'] = True
     run([exe, '--data', fresh, 'config', '--endpoint', 'https://api.example.com/v1/chat/completions', '--model', 'fixture-vision'])
-    configured = json.loads(run([exe, '--data', fresh, 'config']))
+    configured = json.loads(run([exe, '--data', fresh, 'config', '--json']))
     assert configured['ai']['enabled'] and configured['ai']['model'] == 'fixture-vision'
     run([exe, '--data', fresh, 'config', '--agent', 'auto'])
-    assert not json.loads(run([exe, '--data', fresh, 'config']))['ai']['enabled']
+    assert not json.loads(run([exe, '--data', fresh, 'config', '--json']))['ai']['enabled']
     result['llm_config_cli_roundtrip'] = True
     run([exe, '--data', fresh, 'config', '--profile', 'battery'])
-    profile = json.loads(run([exe, '--data', fresh, 'config']))
+    profile = json.loads(run([exe, '--data', fresh, 'config', '--json']))
     assert profile['min_save_seconds'] == 120 and profile['max_images_per_day'] == 144
     assert profile['ai']['model'] == 'fixture-vision' and not profile['ai']['enabled']
     result['profile_preserves_provider'] = True
@@ -57,7 +62,7 @@ try:
     if args.skip_native_check:
         result['native_query'] = 'skipped_explicitly_not_verified'
     else:
-        doctor = json.loads(cli('doctor'))
+        doctor = json.loads(cli('doctor', '--json'))
         result['power'] = {k: doctor['environment'][k] for k in ['on_battery', 'battery_percent', 'low_power', 'thermal', 'screen_permission']}
     fixture = root / 'synthetic.jpg'
     run(['go', 'run', './scripts/fixture', fixture])
@@ -81,13 +86,13 @@ try:
         parts = run(['/bin/ps', '-o', 'rss=,pcpu=,nice=', '-p', str(proc.pid)]).split()
         samples.append({'rss_kib': int(parts[0]), 'cpu_percent': float(parts[1]), 'nice': int(parts[2])})
     result['idle_fixture_samples'] = samples
-    cli('pause', '--minutes', '0')
+    assert '暂停' in cli('pause', '--minutes', '0')
     deadline = time.monotonic() + 5
     while not json.loads(cli('status', '--json'))['paused']:
         if time.monotonic() > deadline:
             raise RuntimeError('pause did not apply')
         time.sleep(0.05)
-    cli('resume')
+    assert '恢复' in cli('resume')
     deadline = time.monotonic() + 5
     while json.loads(cli('status', '--json'))['paused']:
         if time.monotonic() > deadline:
@@ -98,7 +103,8 @@ try:
     cli('stop')
     result['pause_resume_stop'] = True
     assert not (data / 'run.sock').exists()
-    pending = json.loads(cli('pending', '--limit', '1'))
+    assert '待整理' in cli('pending')
+    pending = json.loads(cli('pending', '--limit', '1', '--json'))
     assert len(pending) == 1
     batch = pending[0]['batch']
     assert len(Path(batch['frames'][0]['file']).parts) == 3
@@ -123,7 +129,7 @@ try:
         report_file = root / 'report.json'
         report_file.write_text(json.dumps(report, ensure_ascii=False))
         report_file.chmod(0o600)
-        cli('commit', '--file', report_file)
+        assert '活动记录已保存' in cli('commit', '--file', report_file)
     timeline = json.loads(cli('today', '--json'))
     assert timeline['reports'] and timeline['pending_batches'] == 0
     result['report_commit_and_query'] = True
@@ -149,7 +155,7 @@ try:
     check = json.loads(cli('update', '--check', '--json'))
     assert not check['upgrade_available']
     result['update_reinstall'] = json.loads(cli('update', '--force', '--json'))['state']
-    assert json.loads(cli('version'))['version'] == result['installed_version']
+    assert json.loads(cli('version', '--json'))['version'] == result['installed_version']
     run(['python3', repo / 'scripts/install-skills.py', '--agent', 'all', '--home', root / 'home'])
     result['skill_dirs'] = [str(path.relative_to(root / 'home')) for path in (root / 'home').rglob('SKILL.md')]
     assert len(result['skill_dirs']) == 3

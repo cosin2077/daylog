@@ -35,6 +35,7 @@ const help = `Daylog — 自动记录今天做了什么
 
 配置、截图和日记都在 ~/.daylog。
 自动使用本机 Agent 的模型配置，分析时可能调用云端服务。
+默认输出便于阅读；Agent / 脚本查询请加 --json。
 更多设置与排障：daylog help --advanced
 `
 
@@ -62,6 +63,9 @@ daylog [--data 私有目录] <命令>
   service install [--login] [--dry-run]   安装 LaunchAgent，不立即启动
   service start | stop | uninstall
   version
+
+结果命令默认显示中文，加 --json 输出结构化结果。
+service install --dry-run 默认导出原始 plist；run 为前台进程，不输出结果文档。
 
 默认不配置额外 API；启动后尝试已有 Agent（可能使用云端服务）。安装不启动录制。
 `
@@ -116,9 +120,20 @@ func execute(args []string) error {
 		return nil
 	}
 	if args[0] == "version" || args[0] == "--version" {
-		return output(map[string]string{"version": version})
+		asJSON, err := jsonOption("version", args[1:])
+		if err != nil {
+			return err
+		}
+		return result(asJSON, map[string]string{"version": version}, "Daylog "+version)
 	}
 	if args[0] == "prompt" {
+		asJSON, err := jsonOption("prompt", args[1:])
+		if err != nil {
+			return err
+		}
+		if asJSON {
+			return output(map[string]string{"prompt": journal.AnalysisPrompt()})
+		}
 		fmt.Print(journal.AnalysisPrompt())
 		return nil
 	}
@@ -178,29 +193,67 @@ func execute(args []string) error {
 		fmt.Println("已停止记录。再次开始：daylog start")
 		return nil
 	case "init":
+		asJSON, err := jsonOption("init", args[1:])
+		if err != nil {
+			return err
+		}
 		if err = s.Init(); err != nil {
 			return err
 		}
-		return output(map[string]string{"config": filepath.Join(s.Root, "config.json"), "state": "initialized_not_running"})
+		return result(asJSON, map[string]string{"config": filepath.Join(s.Root, "config.json"), "state": "initialized_not_running"}, "配置已就绪："+filepath.Join(s.Root, "config.json")+"\n运行 daylog start 开始记录。")
 	case "config":
 		return configure(s, args[1:], os.Stdin, os.Stdout, native.SetSecret)
 	case "doctor":
+		asJSON, err := jsonOption("doctor", args[1:])
+		if err != nil {
+			return err
+		}
 		env, err := (native.Mac{}).Environment(ctx)
 		if err != nil {
 			return err
 		}
 		c, configErr := journal.ReadConfig(s.Root)
-		return output(map[string]any{"version": version, "environment": env, "config_valid": configErr == nil, "policy": journal.PowerPolicy(c, env), "data_dir": s.Root, "note": "权限检查不代表真实截图、续航或安装升级已验证"})
+		if asJSON {
+			return output(map[string]any{"version": version, "environment": env, "config_valid": configErr == nil, "policy": journal.PowerPolicy(c, env), "data_dir": s.Root, "note": "权限检查不代表真实截图、续航或安装升级已验证"})
+		}
+		writeDoctor(os.Stdout, s.Root, env, c, configErr == nil)
+		return nil
 	case "permission":
-		return output(map[string]bool{"granted": native.RequestPermission()})
+		asJSON, err := jsonOption("permission", args[1:])
+		if err != nil {
+			return err
+		}
+		granted := native.RequestPermission()
+		message := "尚未获得录屏权限，请在 macOS 系统设置中授权 Daylog。"
+		if granted {
+			message = "录屏权限已开启。运行 daylog start 开始记录。"
+		}
+		return result(asJSON, map[string]bool{"granted": granted}, message)
 	case "windows":
+		asJSON, err := jsonOption("windows", args[1:])
+		if err != nil {
+			return err
+		}
 		windows, err := native.Windows()
 		if err != nil {
 			return err
 		}
-		return output(windows)
+		if asJSON {
+			return output(windows)
+		}
+		writeWindows(os.Stdout, windows)
+		return nil
 	case "agents":
-		return output(journal.Agents())
+		asJSON, err := jsonOption("agents", args[1:])
+		if err != nil {
+			return err
+		}
+		agents := journal.Agents()
+		if asJSON {
+			return output(agents)
+		}
+		writeAgents(os.Stdout, agents)
+		return nil
 	case "update":
 		f := flags("update")
 		source := f.String("source", "", "release manifest URL or local file")
@@ -325,6 +378,7 @@ func execute(args []string) error {
 		return statusCommand(s, args[1:])
 	case "resume", "pause":
 		f := flags(args[0])
+		asJSON := f.Bool("json", false, "JSON output")
 		minutes := f.Int("minutes", 30, "pause duration, 0 means indefinite")
 		if err = f.Parse(args[1:]); err != nil {
 			return err
@@ -336,9 +390,17 @@ func execute(args []string) error {
 		if err != nil {
 			return err
 		}
-		return output(status)
+		message := "已请求恢复记录。用 daylog status 查看当前状态。"
+		if args[0] == "pause" {
+			message = "已请求暂停记录。运行 daylog start 可继续。"
+			if *minutes > 0 {
+				message = fmt.Sprintf("已请求暂停记录 %d 分钟，之后自动恢复。", *minutes)
+			}
+		}
+		return result(*asJSON, status, message)
 	case "pending":
 		f := flags("pending")
+		asJSON := f.Bool("json", false, "JSON output")
 		limit := f.Int("limit", 1, "batch limit")
 		if err = f.Parse(args[1:]); err != nil {
 			return err
@@ -346,9 +408,17 @@ func execute(args []string) error {
 		if *limit < 1 || *limit > 256 {
 			return errors.New("limit must be 1..256")
 		}
-		batches, err := s.Pending(*limit)
+		batches, err := s.Pending(0)
 		if err != nil {
 			return err
+		}
+		total := len(batches)
+		if len(batches) > *limit {
+			batches = batches[:*limit]
+		}
+		if !*asJSON {
+			writePending(os.Stdout, batches, total)
+			return nil
 		}
 		out := []map[string]any{}
 		for _, b := range batches {
@@ -369,6 +439,7 @@ func execute(args []string) error {
 		return output(out)
 	case "commit":
 		f := flags("commit")
+		asJSON := f.Bool("json", false, "JSON output")
 		file := f.String("file", "-", "report JSON")
 		if err = f.Parse(args[1:]); err != nil {
 			return err
@@ -391,10 +462,11 @@ func execute(args []string) error {
 		if err = s.CommitAnalysis(identity.BatchID, data, "agent", ""); err != nil {
 			return err
 		}
-		return output(map[string]string{"batch_id": identity.BatchID, "state": "committed"})
+		return result(*asJSON, map[string]string{"batch_id": identity.BatchID, "state": "committed"}, "活动记录已保存。用 daylog today 或 daylog report 查看。")
 
 	case "analyze":
 		f := flags("analyze")
+		asJSON := f.Bool("json", false, "JSON output")
 		id := f.String("batch", "", "batch ID")
 		agent := f.String("agent", "", "choose a local agent instead of configured API")
 		allowBattery := f.Bool("allow-battery", false, "explicit battery override")
@@ -418,7 +490,7 @@ func execute(args []string) error {
 				return err
 			}
 			if len(pending) == 0 {
-				return output(map[string]string{"state": "no_pending_batches"})
+				return result(*asJSON, map[string]string{"state": "no_pending_batches"}, "没有待整理的批次。")
 			}
 			*id = pending[0].ID
 		}
@@ -430,7 +502,7 @@ func execute(args []string) error {
 		if err != nil {
 			return err
 		}
-		return output(map[string]string{"batch_id": *id, "state": "analyzed"})
+		return result(*asJSON, map[string]string{"batch_id": *id, "state": "analyzed"}, "已完成一批活动整理。用 daylog today 或 daylog report 查看。")
 	case "today":
 		f := flags("today")
 		date := f.String("date", time.Now().Format("2006-01-02"), "local calendar day")
@@ -460,10 +532,10 @@ func execute(args []string) error {
 		if *asJSON {
 			return output(map[string]any{"date": *date, "reports": reports, "pending_batches": count})
 		}
-		fmt.Printf("# %s\n\n", *date)
+		fmt.Printf("Daylog · %s\n\n", *date)
 		for _, r := range reports {
 			for _, card := range r.Cards {
-				fmt.Printf("- %s–%s **%s**：%s", card.Start.Local().Format("15:04"), card.End.Local().Format("15:04"), card.Title, card.Summary)
+				fmt.Printf("  %s–%s  %s\n    %s", card.Start.Local().Format("15:04"), card.End.Local().Format("15:04"), readable(card.Title), readable(card.Summary))
 				if card.DurationMethod != "" {
 					fmt.Printf("（观察估计约 %d 分钟）", card.EstimatedSeconds/60)
 				}
@@ -489,13 +561,28 @@ func execute(args []string) error {
 		return nil
 	case "auth":
 		if len(args) < 2 {
-			return errors.New("use auth set --stdin or auth delete")
+			return errors.New("用法：daylog auth set --stdin 或 daylog auth delete")
+		}
+		f := flags("auth " + args[1])
+		asJSON := f.Bool("json", false, "JSON output")
+		fromStdin := f.Bool("stdin", false, "read key from stdin")
+		if err = f.Parse(args[2:]); err != nil {
+			return err
+		}
+		if f.NArg() != 0 {
+			return errors.New("auth 不接受位置参数")
 		}
 		if args[1] == "delete" {
-			return native.DeleteSecret()
+			if *fromStdin {
+				return errors.New("auth delete 不接受 --stdin")
+			}
+			if err = native.DeleteSecret(); err != nil {
+				return err
+			}
+			return result(*asJSON, map[string]string{"state": "deleted_from_keychain"}, "已删除 Daylog 的系统钥匙串凭据。")
 		}
-		if args[1] != "set" || len(args) != 3 || args[2] != "--stdin" {
-			return errors.New("API keys are accepted only on stdin")
+		if args[1] != "set" || !*fromStdin {
+			return errors.New("请使用 daylog auth set --stdin 从标准输入传入密钥")
 		}
 		data, err := io.ReadAll(io.LimitReader(os.Stdin, 16385))
 		if err != nil {
@@ -503,12 +590,13 @@ func execute(args []string) error {
 		}
 		value := strings.TrimSpace(string(data))
 		if value == "" || len(value) > 16384 {
-			return errors.New("invalid API key length")
+			return errors.New("API Key 长度无效")
 		}
 		if err = native.SetSecret(value); err != nil {
 			return err
 		}
-		return output(map[string]string{"state": "stored_in_keychain"})
+		return result(*asJSON, map[string]string{"state": "stored_in_keychain"}, "API Key 已保存到 macOS 系统钥匙串。")
+
 	case "service":
 		if len(args) < 2 {
 			return errors.New("service requires install/start/stop/uninstall")
@@ -520,6 +608,7 @@ func execute(args []string) error {
 		switch args[1] {
 		case "install":
 			f := flags("service install")
+			asJSON := f.Bool("json", false, "JSON output")
 			login := f.Bool("login", false, "start at login")
 			dry := f.Bool("dry-run", false, "print plist without installing")
 			if err = f.Parse(args[2:]); err != nil {
@@ -534,6 +623,9 @@ func execute(args []string) error {
 				return err
 			}
 			if *dry {
+				if *asJSON {
+					return output(map[string]string{"plist": string(service.Plist(exe, s.Root, *login)), "state": "preview"})
+				}
 				_, err = os.Stdout.Write(service.Plist(exe, s.Root, *login))
 				return err
 			}
@@ -541,22 +633,40 @@ func execute(args []string) error {
 			if err != nil {
 				return err
 			}
-			return output(map[string]any{"plist": path, "state": "installed_not_started", "start_at_login": *login})
+			return result(*asJSON, map[string]any{"plist": path, "state": "installed_not_started", "start_at_login": *login}, "后台服务已配置，尚未启动。\n登录启动："+enabled(*login)+"\n配置文件："+path)
 		case "start":
-			return service.Start(home, s.Root)
+			asJSON, err := jsonOption("service start", args[2:])
+			if err != nil {
+				return err
+			}
+			if err = service.Start(home, s.Root); err != nil {
+				return err
+			}
+			return result(asJSON, map[string]string{"state": "start_requested"}, "已请求启动后台服务。用 daylog status 查看运行情况。")
 		case "stop":
-			return service.Stop(s.Root)
+			asJSON, err := jsonOption("service stop", args[2:])
+			if err != nil {
+				return err
+			}
+			if err = service.Stop(s.Root); err != nil {
+				return err
+			}
+			return result(asJSON, map[string]string{"state": "stopped"}, "后台服务已停止。")
 		case "uninstall":
+			asJSON, err := jsonOption("service uninstall", args[2:])
+			if err != nil {
+				return err
+			}
 			if err = service.Stop(s.Root); err != nil {
 				return err
 			}
 			err = os.Remove(service.Path(home, s.Root))
-			if errors.Is(err, os.ErrNotExist) {
-				return nil
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
 			}
-			return err
+			return result(asJSON, map[string]string{"state": "uninstalled"}, "后台服务注册已移除，历史记录保留。")
 		}
-		return errors.New("unknown service operation")
+		return errors.New("未知服务操作；可用 install、start、stop、uninstall")
 	}
 	return errors.New("unknown command; use daylog help")
 }

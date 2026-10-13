@@ -207,7 +207,7 @@ func startRecording(ctx context.Context, s *journal.Store, login, asJSON bool) e
 }
 
 func queryNativeEnvironment(ctx context.Context, root string) (native.Environment, error) {
-	handled, data, err := nativeAppResult(ctx, root, []string{"doctor"})
+	handled, data, err := nativeAppResult(ctx, root, []string{"doctor", "--json"})
 	if !handled {
 		return (native.Mac{}).Environment(ctx)
 	}
@@ -227,7 +227,7 @@ func ensurePermission(ctx context.Context, root string) error {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "首次使用需要 macOS 录屏授权。请在系统设置中开启 Daylog；完成后会自动继续。")
-	if handled, _, err := nativeAppResult(ctx, root, []string{"permission"}); err != nil {
+	if handled, _, err := nativeAppResult(ctx, root, []string{"permission", "--json"}); err != nil {
 		return err
 	} else if !handled {
 		native.RequestPermission()
