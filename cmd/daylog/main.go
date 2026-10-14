@@ -20,7 +20,7 @@ import (
 	"daylog/internal/update"
 )
 
-var version = "0.4.2"
+var version = "0.4.3"
 
 const help = `Daylog — 自动记录今天做了什么
 
@@ -314,21 +314,10 @@ func execute(args []string) error {
 					return nil
 				}
 				wasRunning = true
-				if _, stopErr := journal.SendControl(s.Root, journal.Control{Op: "stop"}); stopErr != nil {
-					return stopErr
-				}
-				deadline := time.Now().Add(15 * time.Second)
-				for time.Now().Before(deadline) {
-					if _, probe := journal.SendControl(s.Root, journal.Control{Op: "status"}); probe != nil {
-						return nil
-					}
-					select {
-					case <-ctx.Done():
-						return ctx.Err()
-					case <-time.After(100 * time.Millisecond):
-					}
-				}
-				return errors.New("recording did not stop in time; update refused")
+				// Unload the LaunchAgent and wait for the daemon lock. A socket
+				// disappearing does not prove launchd has reaped the exiting process;
+				// kickstart during that gap can succeed without launching a replacement.
+				return stopRuntime(ctx, s.Root)
 			})
 			return installErr
 		})
@@ -340,6 +329,9 @@ func execute(args []string) error {
 			home, _ := os.UserHomeDir()
 			if err = service.Start(home, s.Root); err != nil {
 				return errors.New("app updated; background restart failed")
+			}
+			if _, err = waitRuntimeReady(ctx, func() (journal.Status, error) { return journal.SendControl(s.Root, journal.Control{Op: "status"}) }); err != nil {
+				return errors.New("应用已更新，但后台未就绪；运行 daylog start 恢复，或查看 ~/.daylog/daemon.log")
 			}
 			restarted = true
 		}

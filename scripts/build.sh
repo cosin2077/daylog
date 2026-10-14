@@ -3,7 +3,7 @@ set -eu
 daylog_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$daylog_root"
 [ "$(uname -s)" = Darwin ] || { echo 'Native build requires macOS and Xcode Command Line Tools.' >&2; exit 1; }
-daylog_version=${DAYLOG_VERSION:-0.4.2}
+daylog_version=${DAYLOG_VERSION:-0.4.3}
 printf '%s\n' "$daylog_version" | /usr/bin/grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo 'DAYLOG_VERSION must be numeric major.minor.patch.' >&2; exit 1; }
 daylog_host=$(go env GOARCH)
 daylog_arches=$daylog_host

@@ -98,3 +98,22 @@ func TestTodayInitializesAndExplainsHowToStart(t *testing.T) {
 		t.Fatal("query started recording")
 	}
 }
+
+func TestRuntimeReadyWaitsForPublishedStatus(t *testing.T) {
+	calls := 0
+	status, err := waitRuntimeReady(context.Background(), func() (journal.Status, error) {
+		calls++
+		if calls < 3 {
+			return journal.Status{}, nil
+		}
+		return journal.Status{PID: 42, UpdatedAt: time.Now()}, nil
+	})
+	if err != nil || calls != 3 || status.PID != 42 {
+		t.Fatal("accepted launch acknowledgement before daemon readiness")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err = waitRuntimeReady(ctx, func() (journal.Status, error) { return journal.Status{}, errors.New("not started") }); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("failed launch was reported as restarted")
+	}
+}

@@ -148,10 +148,16 @@ func startWith(ctx context.Context, root string, a startActions) (journal.Status
 			return journal.Status{}, err
 		}
 	}
+	return waitRuntimeReady(ctx, a.status)
+}
+
+// A launchctl success is only a request acknowledgement. Require the new
+// daemon to publish its first status before reporting a successful restart.
+func waitRuntimeReady(ctx context.Context, probe func() (journal.Status, error)) (journal.Status, error) {
 	deadline := time.NewTimer(15 * time.Second)
 	defer deadline.Stop()
 	for {
-		status, err := a.status()
+		status, err := probe()
 		if err == nil && !status.Paused && !status.UpdatedAt.IsZero() {
 			return status, nil
 		}

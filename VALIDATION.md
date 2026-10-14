@@ -164,3 +164,12 @@
 - 全量 go test -race ./...、go vet ./...、双架构构建/签名检查通过；macOS race 链接仍有既有 LC_DYSYMTAB 告警。
 - 待提交源码已定向检查，不含用户给出的私有 API 凭据；候选配置和真实报告均不在仓库内。保留用户 .DS_Store、.gitignore 和 ui-reference 的独立变更。
 - GitHub Actions 和本机公开 latest 源 update 的结果在发布后追加；以上本地构建验证不替代公网升级或录屏授权保持验证。
+
+
+## 2026-10-14 公网更新实测及 v0.4.3 重启修复
+
+- v0.4.2 的 main/tag 已推送；CI（38521375489）与 Release（38521375517）成功。下载云端双架构附件核对 manifest/checksums、bundle版本及签名完整性后公开为正式版本。
+- 本机原0.4.1执行默认 latest 源 `daylog update`，成功安装0.4.2；已安装二进制与公开arm64附件完全一致，config.json字节未变。升级前额外抽样的一张未选中帧在后台封批后按现有规则清理；另核验全部156张保留关键帧，零缺失、零哈希错误。
+- 实际发现旧更新器存在重启竞态：控制socket已关闭但launchd尚未回收旧进程时，kickstart可能成功返回而没有新进程。0.4.3改为更换App前bootout并等待daemon.lock释放，启动后等待首次状态发布，避免将启动请求已接受当成后台已恢复。
+- 定向race测试及vet通过。新增可选 `scripts/verify-launchd-update.py`，在真实本机GUI launchd域使用独立App/数据和合成图片，连续两次强制更新校验新PID、启动时间、采样和原配置哈希。测试不请求录屏、不调用模型；任务创建的服务、plist、App及合成数据均清理。清理也等待launchd注册消失及文件锁释放。
+- 0.4.1→0.4.2的开发签名更换后，App拥有的录屏预检从true变成false，证实公网自动下载不能保证系统录屏授权跨ad-hoc签名保持。该边界需用户刷新原Daylog授权，不更改TCC数据库、不绕过认证。最终版本的恢复情况将在随后验证。
