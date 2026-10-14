@@ -11,9 +11,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func TestWindowsPrivateStoreLockAndPipe(t *testing.T) {
@@ -26,9 +26,26 @@ func TestWindowsPrivateStoreLockAndPipe(t *testing.T) {
 		t.Fatal(e)
 	}
 	sid, _ := userSID()
-	text := sd.String()
-	if !strings.Contains(text, sid) || strings.Contains(text, ";;;WD)") || strings.Contains(text, ";;;BU)") || strings.Contains(text, ";;;AU)") {
-		t.Fatalf("directory is not private: %s", text)
+	acl, present, e := sd.DACL()
+	if e != nil || !present || acl == nil || acl.AceCount != 2 {
+		t.Fatal("unexpected access control list")
+	}
+	allowed := map[string]bool{sid: false, "S-1-5-18": false}
+	for i := uint32(0); i < uint32(acl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if e = windows.GetAce(acl, i, &ace); e != nil {
+			t.Fatal(e)
+		}
+		identity := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
+		if _, ok := allowed[identity]; !ok || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			t.Fatal("unexpected principal or rule")
+		}
+		allowed[identity] = true
+	}
+	for _, present := range allowed {
+		if !present {
+			t.Fatal("missing private principal")
+		}
 	}
 	a, e := os.Create(filepath.Join(root, "lock"))
 	if e != nil {
