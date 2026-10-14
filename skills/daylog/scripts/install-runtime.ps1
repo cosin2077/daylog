@@ -3,6 +3,11 @@ param(
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Daylog\bin')
 )
 $ErrorActionPreference = 'Stop'
+# A parent PowerShell 7 process can export its module search path to Windows
+# PowerShell 5.1. Load each built-in module from this host's own installation.
+foreach ($module in @('Microsoft.PowerShell.Management','Microsoft.PowerShell.Utility','Microsoft.PowerShell.Security')) {
+    Import-Module (Join-Path $PSHOME "Modules\$module\$module.psd1") -ErrorAction Stop
+}
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { throw 'This release supports Windows x64 only.' }
 $PublisherCertificate = 'MIIEPjCCAqagAwIBAgIJANAhjHgjVfevMA0GCSqGSIb3DQEBCwUAMDIxHzAdBgNVBAMMFkRheWxvZyBSZWxlYXNlIFNpZ25pbmcxDzANBgNVBAoMBkRheWxvZzAeFw0yNjEwMTQwODA4MDBaFw0zNjEwMTEwODA4MDBaMDIxHzAdBgNVBAMMFkRheWxvZyBSZWxlYXNlIFNpZ25pbmcxDzANBgNVBAoMBkRheWxvZzCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCCAYoCggGBAOk32hqHLHoGBeynSPndApJoNtkEhC/txoEDyAyd0nvFX1/Xj2dBN89UJp+Qvivq/9f9NQr6Dk6ipg3utlB/mPKHEADW3wRm618DHyiaM5qg/ATsvo3y2Ezxm5LJ3RcgSlVaWJpDVCb3J0m7ByZc3v0GQQdixNIDBKGdjgc2eL4QkpWFhgQvhaWVsJjS7egWCgBWH92Av3Mj7a03PT5ZozCBkrwYfge9zh9Fd5Ehwx97FbOELGG5BERnTkDkKVqPRNp5DkqyYbKQZiwxfo7yRwTfKcdxxcMpLBkwsdzxo3YJkU8iMTiF5TolcrOZX8i2t6hLfpVQbIR55VnhESn1NmUUDKjI8F5DpJiRh5OorZJY8gjGQJg4wFjvZJcrvtJBUPkHlUGvgCldxGQQ3L4fvI/TB7W62KZuBfTke1awkyebSRbvSwYE80AL6skaRqrAvF3ZnRk4WiZ0xwFg+yQzdjnV2U7Ay3D30Zo57wEQaWrXMIbCre4fhYByflg1w2uC2QIDAQABo1cwVTAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAWBgNVHSUBAf8EDDAKBggrBgEFBQcDAzAdBgNVHQ4EFgQUF1NVwcpdvUSenvRZFXSOMzsYM0UwDQYJKoZIhvcNAQELBQADggGBANhcJsMyMPyXa9PMYmuKgyaDtYa3afX3qRI+lwg5IC7vcfzQXs8GHW59SHy1uzk5Tmb/1DmXc7ZBzQxxSJqo+qig7d1ERy8qJfPmSucQec52gRYJGamdEDuYWOcdfrQFrebWnBudJmmQhqXD4zlisr+7uQnEusXgYr9v2ZogM7TJ0IIe1EwKTi2X0qJ33v3W7yDnL4UYYR3owhc2TRCSCmYzHEqtocB0O0diCi2sOjd3pkg6tdOf7h7wbg+AM8rGts2RVo2ataKusb2X4lkmTigVonbV5Ze2XvpBFY4q+wmLkMsb/DO8HSnsHZlBTx+0u93aDQSk2Ysvsxvaa9GYCnq9Ty78YIhcjtcfBsHoBo80mX4Qa0Q5NUR9Co7oehwIRy2lvbwQUMo4tqMGcxnuYONXkWJ9CO6BtVn4xRpos6fXEB7NKA47OFwM6ZUGG5doOfc/zDXUNYaA80pYiN+Q6/7Esm/djZS7pHUoxY3cdEg9m/AtUZKToJhoIj4MVVJouQ=='
 $IsLocal = -not ($Source -match '^https?://')
