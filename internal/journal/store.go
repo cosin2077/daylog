@@ -2,6 +2,7 @@ package journal
 
 import (
 	"crypto/sha256"
+	"daylog/internal/platform"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,7 +13,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -35,7 +35,7 @@ func Open(root string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+	if !info.IsDir() || platform.PrivateDir(root) != nil {
 		return nil, errors.New("data directory must be a private directory (0700), not a symlink")
 	}
 	for _, sub := range []string{"frames", "batches", "archive", "reports", "usage"} {
@@ -112,16 +112,16 @@ func (s *Store) locked(fn func() error) error {
 	defer f.Close()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		err = platform.TryLock(f)
 		if err == nil {
 			break
 		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) || time.Now().After(deadline) {
+		if !errors.Is(err, platform.ErrBusy) || time.Now().After(deadline) {
 			return errors.New("storage is busy")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	defer platform.Unlock(f)
 	return fn()
 }
 

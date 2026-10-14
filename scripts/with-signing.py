@@ -93,6 +93,13 @@ with tempfile.TemporaryDirectory(prefix='daylog-signing-') as directory:
   env=os.environ.copy()
   env.pop('DAYLOG_SIGNING_P12_BASE64',None);env.pop('DAYLOG_SIGNING_PASSWORD',None)
   env['DAYLOG_SIGNING_IDENTITY']=identity;env['DAYLOG_SIGNING_KEYCHAIN']=str(keychain);env['DAYLOG_REQUIRE_SIGNING']='1'
+  # The Windows ZIP uses the same publisher key for a detached RSA signature.
+  # This private PEM exists only inside the protected, task-owned temp directory.
+  password_file=temp/'p12-password';password_file.write_text(password)
+  release_key=temp/'release-key.pem'
+  run(['openssl','pkcs12','-in',str(package),'-nocerts','-nodes','-passin','file:'+str(password_file),'-out',str(release_key)],'Prepare temporary Windows package signing key')
+  env['DAYLOG_RELEASE_KEY']=str(release_key)
+
   child=subprocess.Popen(command,cwd=repo,env=env,start_new_session=True)
   result=child.wait()
  finally:

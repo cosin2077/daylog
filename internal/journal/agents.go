@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"daylog/internal/platform"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,7 +17,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -50,8 +50,7 @@ func Agents() []AgentInfo {
 func agentPath(name string) (string, error) {
 	if override, ok := os.LookupEnv("DAYLOG_AGENT_SEARCH_PATH"); ok {
 		for _, dir := range filepath.SplitList(override) {
-			path := filepath.Join(dir, name)
-			if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			if path, err := findAgentInDir(dir, name); err == nil {
 				return path, nil
 			}
 		}
@@ -62,8 +61,7 @@ func agentPath(name string) (string, error) {
 	}
 	home, _ := os.UserHomeDir()
 	for _, dir := range []string{filepath.Join(home, ".local", "bin"), filepath.Join(home, ".bun", "bin"), "/opt/homebrew/bin", "/usr/local/bin"} {
-		path := filepath.Join(dir, name)
-		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+		if path, err := findAgentInDir(dir, name); err == nil {
 			return path, nil
 		}
 	}
@@ -168,7 +166,10 @@ func runAgent(ctx context.Context, name, path, dir string, b Batch, images []str
 	default:
 		return trace, errors.New("agent has no verified image adapter")
 	}
-	cmd := exec.CommandContext(ctx, path, args...)
+	cmd, commandErr := imageAgentCommand(ctx, name, path, args)
+	if commandErr != nil {
+		return trace, commandErr
+	}
 	cmd.Dir = dir
 	home, _ := os.UserHomeDir()
 	env := os.Environ()
@@ -185,21 +186,20 @@ func runAgent(ctx context.Context, name, path, dir string, b Batch, images []str
 			}
 		}
 	}
-	cmd.Env = append(env, "PATH="+os.Getenv("PATH")+":"+filepath.Join(home, ".local", "bin")+":"+filepath.Join(home, ".bun", "bin")+":/opt/homebrew/bin:/usr/local/bin")
-	cmd.Stdin = bytes.NewReader(input)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	extraPath := []string{filepath.Join(home, ".local", "bin"), filepath.Join(home, ".bun", "bin")}
+	if platform.IsWindows {
+		extraPath = append(extraPath, filepath.Join(os.Getenv("APPDATA"), "npm"), filepath.Join(home, "scoop", "shims"))
+	} else {
+		extraPath = append(extraPath, "/opt/homebrew/bin", "/usr/local/bin")
 	}
+	cmd.Env = append(env, "PATH="+os.Getenv("PATH")+string(os.PathListSeparator)+strings.Join(extraPath, string(os.PathListSeparator)))
+	cmd.Stdin = bytes.NewReader(input)
 	cmd.WaitDelay = 2 * time.Second
 	stdout := &cappedBuffer{max: 2 << 20}
 	cmd.Stdout = stdout
 	stderr := &tailBuffer{max: 16 << 10}
 	cmd.Stderr = stderr
-	callErr := cmd.Run()
+	callErr := platform.RunProcess(cmd)
 	trace.Stderr = stderr.String()
 	trace.Response = string(stdout.Bytes())
 	if callErr != nil {

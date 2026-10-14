@@ -1,10 +1,10 @@
 package journal
 
 import (
+	"daylog/internal/platform"
 	"errors"
 	"os"
 	"path/filepath"
-	"syscall"
 )
 
 var ErrMigrationBusy = errors.New("旧数据仍在使用中")
@@ -19,7 +19,7 @@ func MigrateRoot(oldRoot, newRoot string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+	if !info.IsDir() || platform.PrivateDir(oldRoot) != nil {
 		return false, errors.New("旧数据目录不是私有目录，未迁移")
 	}
 	if _, err = os.Lstat(newRoot); err == nil {
@@ -30,7 +30,7 @@ func MigrateRoot(oldRoot, newRoot string) (bool, error) {
 	var locks []*os.File
 	defer func() {
 		for _, f := range locks {
-			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			_ = platform.Unlock(f)
 			_ = f.Close()
 		}
 	}()
@@ -39,7 +39,7 @@ func MigrateRoot(oldRoot, newRoot string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if err = platform.TryLock(f); err != nil {
 			f.Close()
 			return false, ErrMigrationBusy
 		}

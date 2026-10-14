@@ -17,7 +17,7 @@ func main() {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		env, err := (native.Mac{}).Environment(ctx)
+		env, err := (native.Desktop{}).Environment(ctx)
 		if err != nil {
 			return
 		}

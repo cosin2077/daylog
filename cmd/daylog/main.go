@@ -16,11 +16,12 @@ import (
 
 	"daylog/internal/journal"
 	"daylog/internal/native"
+	"daylog/internal/platform"
 	"daylog/internal/service"
 	"daylog/internal/update"
 )
 
-var version = "0.6.1"
+var version = "0.7.0"
 
 const help = `Daylog — 自动记录今天做了什么
 
@@ -60,12 +61,12 @@ daylog [--data 私有目录] <命令>
                              生成日／周／月报告；默认打开离线 HTML
   prompt                     查看截图分析使用的提示词
   auth set --stdin | auth delete         系统钥匙串凭据，只写不读
-  service install [--login] [--dry-run]   安装 LaunchAgent，不立即启动
+  service install [--login] [--dry-run]   配置用户后台，不立即启动
   service start | stop | uninstall
   version
 
 结果命令默认显示中文，加 --json 输出结构化结果。
-service install --dry-run 默认导出原始 plist；run 为前台进程，不输出结果文档。
+service install --dry-run 默认导出平台后台配置；run 为前台进程，不输出结果文档。
 
 默认不配置额外 API；启动后尝试已有 Agent（可能使用云端服务）。安装不启动录制。
 `
@@ -211,7 +212,7 @@ func execute(args []string) error {
 		if err != nil {
 			return err
 		}
-		env, err := (native.Mac{}).Environment(ctx)
+		env, err := (native.Desktop{}).Environment(ctx)
 		if err != nil {
 			return err
 		}
@@ -308,6 +309,9 @@ func execute(args []string) error {
 			return err
 		}
 		app := filepath.Dir(filepath.Dir(filepath.Dir(exe)))
+		if platform.IsWindows {
+			app = exe
+		}
 		wasRunning := false
 		wasService := service.IsLoaded(s.Root)
 		err = withProgress(!*asJSON, "正在下载、校验并安装更新", func() error {
@@ -356,7 +360,7 @@ func execute(args []string) error {
 		if err != nil {
 			return err
 		}
-		var source native.Source = native.Mac{}
+		var source native.Source = native.Desktop{}
 		if *fixture != "" {
 			data, err := os.ReadFile(*fixture)
 			if err != nil {
@@ -371,7 +375,7 @@ func execute(args []string) error {
 			}
 			c.Agent.Enabled = false
 		}
-		_ = syscall.Setpriority(syscall.PRIO_PROCESS, 0, 10)
+		platform.BackgroundPriority()
 		r := journal.Runner{Store: s, Config: c, Source: source, Key: func() string { return apiKey(c) }}
 		return r.Run(ctx)
 	case "status":
@@ -478,7 +482,7 @@ func execute(args []string) error {
 		if err != nil {
 			return err
 		}
-		env, err := (native.Mac{}).Environment(ctx)
+		env, err := (native.Desktop{}).Environment(ctx)
 		if err != nil {
 			return err
 		}
@@ -626,7 +630,7 @@ func execute(args []string) error {
 			f := flags("service install")
 			asJSON := f.Bool("json", false, "JSON output")
 			login := f.Bool("login", false, "start at login")
-			dry := f.Bool("dry-run", false, "print plist without installing")
+			dry := f.Bool("dry-run", false, "print platform configuration without installing")
 			if err = f.Parse(args[2:]); err != nil {
 				return err
 			}
@@ -638,18 +642,22 @@ func execute(args []string) error {
 			if err != nil {
 				return err
 			}
+			configKey := "plist"
+			if platform.IsWindows {
+				configKey = "config"
+			}
 			if *dry {
 				if *asJSON {
-					return output(map[string]string{"plist": string(service.Plist(exe, s.Root, *login)), "state": "preview"})
+					return output(map[string]string{configKey: string(service.Preview(exe, s.Root, *login)), "state": "preview"})
 				}
-				_, err = os.Stdout.Write(service.Plist(exe, s.Root, *login))
+				_, err = os.Stdout.Write(service.Preview(exe, s.Root, *login))
 				return err
 			}
 			path, err := service.Install(home, s.Root, exe, *login)
 			if err != nil {
 				return err
 			}
-			return result(*asJSON, map[string]any{"plist": path, "state": "installed_not_started", "start_at_login": *login}, "后台服务已配置，尚未启动。\n登录启动："+enabled(*login)+"\n配置文件："+path)
+			return result(*asJSON, map[string]any{configKey: path, "state": "installed_not_started", "start_at_login": *login}, "后台服务已配置，尚未启动。\n登录启动："+enabled(*login)+"\n配置文件："+path)
 		case "start":
 			asJSON, err := jsonOption("service start", args[2:])
 			if err != nil {
@@ -676,7 +684,7 @@ func execute(args []string) error {
 			if err = service.Stop(s.Root); err != nil {
 				return err
 			}
-			err = os.Remove(service.Path(home, s.Root))
+			err = service.Uninstall(home, s.Root)
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}

@@ -1,4 +1,4 @@
-//go:build !darwin || !cgo
+//go:build (!darwin || !cgo) && !windows
 
 package native
 
@@ -7,10 +7,10 @@ import (
 	"errors"
 )
 
-func (Mac) Environment(context.Context) (Environment, error) {
+func (Desktop) Environment(context.Context) (Environment, error) {
 	return Environment{}, errors.New("native capture requires macOS 14+ and a cgo build")
 }
-func (Mac) Capture(context.Context, CaptureOptions) ([]byte, error) {
+func (Desktop) Capture(context.Context, CaptureOptions) ([]byte, error) {
 	return nil, errors.New("native capture unavailable")
 }
 func RequestPermission() bool    { return false }
@@ -18,3 +18,5 @@ func Windows() ([]Window, error) { return nil, errors.New("window selection unav
 func SetSecret(string) error     { return errors.New("Keychain unavailable") }
 func Secret() string             { return "" }
 func DeleteSecret() error        { return errors.New("Keychain unavailable") }
+
+const AppSource = ""

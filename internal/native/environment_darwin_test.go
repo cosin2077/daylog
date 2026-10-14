@@ -10,7 +10,7 @@ import (
 // Querying power/session metadata must decode without Screen Recording access.
 // This exercises the actual Objective-C JSON boundary, without capturing pixels.
 func TestEnvironmentMetadataDecode(t *testing.T) {
-	env, err := (Mac{}).Environment(context.Background())
+	env, err := (Desktop{}).Environment(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -37,4 +37,4 @@ type Source interface {
 	Capture(context.Context, CaptureOptions) ([]byte, error)
 }
 
-type Mac struct{}
+type Desktop struct{}

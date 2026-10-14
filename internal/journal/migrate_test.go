@@ -1,10 +1,12 @@
+//go:build !windows
+
 package journal
 
 import (
+	"daylog/internal/platform"
 	"errors"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -64,13 +66,13 @@ func TestMigrationRefusesActiveWriterAndExistingDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err = platform.TryLock(f); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = MigrateRoot(s.Root, newRoot); !errors.Is(err, ErrMigrationBusy) {
 		t.Fatalf("active daemon migrated: %v", err)
 	}
-	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	platform.Unlock(f)
 	if err = os.Mkdir(newRoot, 0700); err != nil {
 		t.Fatal(err)
 	}

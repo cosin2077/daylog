@@ -3,6 +3,7 @@ package journal
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -26,7 +27,7 @@ func TestFramesUseLocalDateAndReadLegacyLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, _ := os.Stat(filepath.Dir(path))
-	if info.Mode().Perm() != 0700 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0700 {
 		t.Fatal("date folder is not private")
 	}
 	legacy := filepath.Join(s.Root, "frames", f.ID+".jpg")

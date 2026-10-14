@@ -137,8 +137,8 @@ func artifactSource(manifest, artifact string) (string, error) {
 	if strings.HasPrefix(artifact, "https://") || strings.HasPrefix(artifact, "http://") {
 		return artifact, nil
 	}
-	if filepath.Base(artifact) != artifact || !strings.HasSuffix(artifact, ".tar.gz") {
-		return "", errors.New("relative artifact must be a tar.gz filename")
+	if filepath.Base(artifact) != artifact || !(strings.HasSuffix(artifact, ".tar.gz") || strings.HasSuffix(artifact, ".zip")) {
+		return "", errors.New("relative artifact must be a tar.gz or zip filename")
 	}
 	if strings.HasPrefix(manifest, "https://") || strings.HasPrefix(manifest, "http://") {
 		u, err := url.Parse(manifest)
@@ -153,6 +153,9 @@ func artifactSource(manifest, artifact string) (string, error) {
 // Validation is complete before the caller stops recording. The two renames
 // preserve an app backup until replacement succeeds, on the same filesystem.
 func Install(ctx context.Context, source, currentApp, currentVersion string, force bool, beforeSwap func() error) (Check, error) {
+	if runtime.GOOS == "windows" {
+		return installWindows(ctx, source, currentApp, currentVersion, force, beforeSwap)
+	}
 	feed, check, err := Inspect(ctx, source, currentVersion)
 	if err != nil {
 		return check, err
