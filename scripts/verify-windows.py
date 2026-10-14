@@ -90,6 +90,8 @@ try:
         with zipfile.ZipFile(archive,'w') as package:
             package.writestr(name,b'not an executable')
             package.writestr('signature.json',b'{}')
+            package.writestr('LICENSE',b'fixture')
+            package.writestr('THIRD_PARTY_NOTICES.txt',b'fixture')
         modified=json.loads(json.dumps(original));modified['artifacts']['windows-amd64']={'url':archive.name,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
         (bad/'release.json').write_text(json.dumps(modified))
         installer(install,bad/'release.json',expected=1)

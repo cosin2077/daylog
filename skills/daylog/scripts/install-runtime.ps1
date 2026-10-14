@@ -86,12 +86,12 @@ try {
     if ((Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash -ne $artifact.sha256) { throw 'Package checksum mismatch.' }
     $zip = [IO.Compression.ZipFile]::OpenRead($zipPath)
     try {
-        if ($zip.Entries.Count -ne 2) { throw 'Unexpected package entries.' }
+        if ($zip.Entries.Count -ne 4) { throw 'Unexpected package entries.' }
         $seen = @{}
         foreach ($entry in $zip.Entries) {
-            if ($entry.FullName -notin @('daylog.exe','signature.json') -or $seen.ContainsKey($entry.FullName)) { throw 'Unsafe package entry.' }
+            if ($entry.FullName -notin @('daylog.exe','signature.json','LICENSE','THIRD_PARTY_NOTICES.txt') -or $seen.ContainsKey($entry.FullName)) { throw 'Unsafe package entry.' }
             $seen[$entry.FullName] = $true
-            $limit = if ($entry.FullName -eq 'signature.json') { 8192 } else { 33554432 }
+            $limit = if ($entry.FullName -eq 'signature.json') { 8192 } elseif ($entry.FullName -eq 'daylog.exe') { 33554432 } else { 65536 }
             if ($entry.Length -gt $limit) { throw 'Package entry exceeds limit.' }
             if ((($entry.ExternalAttributes -shr 16) -band 0xF000) -eq 0xA000) { throw 'Symbolic links are not allowed.' }
             $input = $entry.Open()
@@ -130,6 +130,7 @@ try {
         & $target update --source $manifest
         if ($LASTEXITCODE -ne 0) { throw 'Existing installation update failed.' }
     } else { Move-Item -LiteralPath $exe -Destination $target }
+    foreach ($name in @('LICENSE','THIRD_PARTY_NOTICES.txt')) { Copy-Item -LiteralPath (Join-Path $temp $name) -Destination (Join-Path $InstallDir $name) -Force }
     $userPath = [string][Environment]::GetEnvironmentVariable('Path', 'User')
     if ($InstallDir -notin ($userPath -split ';')) { [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';') + ';' + $InstallDir).TrimStart(';')), 'User') }
     Write-Host "Installed Daylog $($feed.version): $target"

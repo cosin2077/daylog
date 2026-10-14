@@ -47,7 +47,7 @@ for arch in ('arm64', 'amd64'):
 windows_package=assets/'daylog-windows-amd64.zip'
 if hashlib.sha256(windows_package.read_bytes()).hexdigest()!=feed['artifacts']['windows-amd64']['sha256']:parser.error('Windows checksum mismatch')
 with zipfile.ZipFile(windows_package) as package:
-    if sorted(package.namelist())!=['daylog.exe','signature.json']:parser.error('Unexpected Windows package contents')
+    if sorted(package.namelist())!=['LICENSE','THIRD_PARTY_NOTICES.txt','daylog.exe','signature.json']:parser.error('Unexpected Windows package contents')
     metadata=json.loads(package.read('signature.json'))
     digest=hashlib.sha256(package.read('daylog.exe')).hexdigest()
     if metadata['version']!=args.version or metadata['platform']!='windows-amd64' or metadata['sha256']!=digest:parser.error('Windows package metadata mismatch')

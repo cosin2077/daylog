@@ -50,21 +50,23 @@ func verifyWindowsSignature(meta windowsSignature, version, platform, digest str
 }
 
 // The ZIP is data until both the executable hash and the fixed publisher's
-// signature are checked. Only two exact entry names are allowed.
+// signature are checked. Only four exact entry names are allowed.
 func extractWindows(archive, directory, version, arch string, allowDevelopment bool) error {
 	r, e := zip.OpenReader(archive)
 	if e != nil {
 		return e
 	}
 	defer r.Close()
-	if len(r.File) != 2 {
-		return errors.New("Windows package must contain executable and signature only")
+	if len(r.File) != 4 {
+		return errors.New("Windows package must contain executable, signature and license notices")
 	}
 	seen := map[string]bool{}
 	for _, f := range r.File {
 		limit := uint64(32 << 20)
 		if f.Name == "signature.json" {
 			limit = 8192
+		} else if f.Name == "LICENSE" || f.Name == "THIRD_PARTY_NOTICES.txt" {
+			limit = 65536
 		} else if f.Name != "daylog.exe" {
 			return errors.New("unexpected Windows package entry")
 		}

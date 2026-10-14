@@ -26,8 +26,8 @@ func TestWindowsPrivateStoreLockAndPipe(t *testing.T) {
 		t.Fatal(e)
 	}
 	sid, _ := userSID()
-	acl, present, e := sd.DACL()
-	if e != nil || !present || acl == nil || acl.AceCount != 2 {
+	acl, _, e := sd.DACL()
+	if e != nil || acl == nil || acl.AceCount != 2 {
 		t.Fatal("unexpected access control list")
 	}
 	allowed := map[string]bool{sid: false, "S-1-5-18": false}

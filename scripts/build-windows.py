@@ -41,6 +41,8 @@ assets=root/'skills/daylog/assets';assets.mkdir(parents=True,exist_ok=True)
 package=assets/'daylog-windows-amd64.zip'
 with zipfile.ZipFile(package,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as archive:
     for name in ['daylog.exe','signature.json']:archive.write(out/name,name)
+    archive.write(root/'LICENSE','LICENSE')
+    archive.write(root/'docs/third-party-notices.txt','THIRD_PARTY_NOTICES.txt')
 manifest=assets/'release.json'
 feed=json.loads(manifest.read_text()) if manifest.exists() else {'version':version,'artifacts':{}}
 if feed['version']!=version:feed={'version':version,'artifacts':{}}

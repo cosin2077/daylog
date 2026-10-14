@@ -86,6 +86,15 @@ func installWindows(ctx context.Context, source, currentExe, currentVersion stri
 	if json.Unmarshal(versionData, &v) != nil || v.Version != feed.Version {
 		return check, errors.New("Windows build version mismatch")
 	}
+	for _, name := range []string{"LICENSE", "THIRD_PARTY_NOTICES.txt"} {
+		data, err := os.ReadFile(filepath.Join(stage, name))
+		if err != nil {
+			return check, err
+		}
+		if err = os.WriteFile(filepath.Join(filepath.Dir(currentExe), name), data, 0600); err != nil {
+			return check, err
+		}
+	}
 	if beforeSwap != nil {
 		if e = beforeSwap(); e != nil {
 			return check, e
