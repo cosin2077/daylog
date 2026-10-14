@@ -59,6 +59,7 @@ with tempfile.TemporaryDirectory(prefix='daylog-signing-') as directory:
  ci_certificate_added=False
  trust_domain=['-d'] if os.environ.get('GITHUB_ACTIONS')=='true' else []
  trust_prefix=['/usr/bin/sudo','-n'] if trust_domain else []
+ disposable_ci=bool(trust_domain) and os.environ.get('RUNNER_ENVIRONMENT')=='github-hosted'
  def search_paths():
   p=subprocess.run(['/usr/bin/security','list-keychains','-d','user'],capture_output=True,text=True)
   if p.returncode:raise SystemExit('Cannot read keychain search list')
@@ -102,7 +103,13 @@ with tempfile.TemporaryDirectory(prefix='daylog-signing-') as directory:
     if p.returncode:cleanup_errors.append(description)
    except subprocess.TimeoutExpired:cleanup_errors.append(description)
   if trust_added:
-   cleanup(trust_prefix+['/usr/bin/security','remove-trusted-cert',*trust_domain,str(repo/'internal/update/signing-certificate.der')],'temporary signing trust')
+   if disposable_ci:
+    # Some macOS hosted images prompt when removing admin trust even as root.
+    # This public, codeSign-only trust is discarded with the isolated VM.
+    # Private signing material is still removed below, before later steps.
+    print('Public code-signing trust is confined to this disposable GitHub-hosted runner; VM disposal removes it.',flush=True)
+   else:
+    cleanup(trust_prefix+['/usr/bin/security','remove-trusted-cert',*trust_domain,str(repo/'internal/update/signing-certificate.der')],'temporary signing trust')
   if ci_certificate_added:
    cleanup(trust_prefix+['/usr/bin/security','delete-certificate','-Z',identity,'/Library/Keychains/System.keychain'],'temporary CI public signing certificate')
   if search_added:
