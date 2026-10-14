@@ -28,12 +28,14 @@ func startPowerObserver() {
 			def := user32.NewProc("DefWindowProcW")
 			proc := windows.NewCallback(func(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 				if msg == 0x218 && wparam == 0x8013 && lparam != 0 { // WM_POWERBROADCAST / PBT_POWERSETTINGCHANGE
-					setting := (*struct {
+					setting := struct {
 						ID     windows.GUID
 						Length uint32
 						Value  uint32
-					})(unsafe.Pointer(lparam))
-					if setting.Length == 4 && setting.ID == displayGUID {
+					}{}
+					var read uintptr
+					readErr := windows.ReadProcessMemory(windows.CurrentProcess(), lparam, (*byte)(unsafe.Pointer(&setting)), unsafe.Sizeof(setting), &read)
+					if readErr == nil && read == unsafe.Sizeof(setting) && setting.Length == 4 && setting.ID == displayGUID {
 						displayOff.Store(setting.Value == 0)
 					}
 				}

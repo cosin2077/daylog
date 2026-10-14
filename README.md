@@ -2,7 +2,7 @@
 
 <img src="assets/icon/daylog.png" width="96" height="96" alt="Daylog：日光与日志" />
 
-自动记录今天做了什么。macOS 14+，后台采样截图，自动调用已有 Agent 的视觉模型整理成工作日记。
+自动记录今天做了什么。支持 macOS 14+；Windows 10/11 x64 适配从 0.7.0 起提供。后台采样截图，自动调用已有 Agent 的视觉模型整理成工作日记。
 
 ## 日常只需三个命令
 
@@ -31,12 +31,12 @@ daylog stop     # 停止记录
 <details>
 <summary>Agent 安装步骤 / 手动安装</summary>
 
-1. 确认系统为 macOS 14+。获取本仓库的 `skills/daylog`，或下载 [最新 Release 的轻量 skill 包](https://github.com/cosin2077/daylog/releases/latest/download/daylog-skill.tar.gz)。获取不到时检查 [Releases](https://github.com/cosin2077/daylog/releases)，草稿或预发布不属于默认 latest。尚无正式 Release 时明确告知，不要自动要求用户安装编译工具。
+1. 确认平台：macOS 14+ 或 Windows 10/11 x64。Windows 安装要求 Release 包含 `windows-amd64` 附件；没有时说明尚未发布该平台版本，不要求用户安装编译工具。获取本仓库的 `skills/daylog`，或下载 [最新 Release 的轻量 skill 包](https://github.com/cosin2077/daylog/releases/latest/download/daylog-skill.tar.gz)。获取不到时检查 [Releases](https://github.com/cosin2077/daylog/releases)，草稿或预发布不属于默认 latest。尚无正式 Release 时明确告知，不要自动要求用户安装编译工具。
 2. 将 skill 放到当前 Agent 的目录：Codex 为 `~/.agents/skills/daylog`，Claude Code 为 `~/.claude/skills/daylog`，Hermes 为 `~/.hermes/skills/daylog`。源码仓库提供 `python3 scripts/install-skills.py --agent codex`（按当前 Agent 修改）；也可直接复制目录，不要求用户安装 Python。目标已存在时比较并保留用户修改。
-3. 从安装后的 skill 目录执行 `sh scripts/install-runtime.sh`。它读取正式 Release 清单、检测 Apple Silicon / Intel，只下载匹配的二进制包，校验 SHA-256、包路径、固定发布证书、App 签名完整性、版本和架构后安装；已有安装通过更新器升级并保留配置和日记。
-4. 验证 `~/.local/bin/daylog version` 和 `~/.local/bin/daylog -h`，告知安装版本。安装到此完成；只有用户要求开始记录时才执行 `daylog start`，macOS 授权由本人完成。
+3. 从安装后的 skill 目录运行对应安装器：macOS 执行 `sh scripts/install-runtime.sh`；Windows 执行 `powershell.exe -NoProfile -File scripts/install-runtime.ps1`。它们只下载匹配平台的二进制，校验包摘要和固定发布身份后安装；已有安装通过更新器升级并保留配置和日记。macOS 校验 App 签名，Windows 校验 ZIP 内的 RSA 签名。
+4. 验证 `daylog version` 和 `daylog -h`，告知版本。PATH 尚未生效时，macOS 使用 `~/.local/bin/daylog`，Windows 使用 `%LOCALAPPDATA%\Daylog\bin\daylog.exe`。安装到此完成；只有用户要求开始记录时才执行 `daylog start`，macOS 授权由本人完成。
 
-应用安装到 `~/Applications/Daylog.app`，命令链接到 `~/.local/bin/daylog`。预编译运行时的安装不需要 Go、Node、Python 或包管理器；skill 安装脚本只是可选便利工具。
+macOS 应用安装到 `~/Applications/Daylog.app`，命令链接到 `~/.local/bin/daylog`；Windows 安装路径见上。预编译运行时的安装不需要 Go、Node、Python 或包管理器；skill 安装脚本只是可选便利工具。
 
 维护者离线测试：先运行 `DAYLOG_DEVELOPMENT_BUILD=1 sh scripts/build.sh --all-arches`，再从 skill 目录执行 `DAYLOG_DEVELOPMENT_INSTALL=1 sh scripts/install-runtime.sh --source "$PWD/assets/release.json"`。此模式使用本地包和更新源；普通用户保持默认在线方式。
 
@@ -90,6 +90,21 @@ daylog config --endpoint https://api.example.com/v1/chat/completions --model vis
 旧版 `~/Library/Application Support/Daylog` 会整体迁移，保留历史和配置；新旧目录同时存在时拒绝覆盖。App 与 macOS 要求的后台注册文件仍放在系统约定位置。
 
 默认截取主屏；可通过配置选择窗口和排除敏感应用。截图是权限受限的本地明文文件。已分析原图保留 3 天，日记保留 90 天，待分析证据不会被自动清理。
+
+## Windows
+
+Windows 与 macOS 使用相同命令和数据布局。Agent 在 Windows 上执行 skill 的 `scripts/install-runtime.ps1`，下载匹配的 x64 二进制，安装到 `%LOCALAPPDATA%\Daylog\bin\daylog.exe`；配置和记录在 `%USERPROFILE%\.daylog`。无需管理员权限、Go 或 Python。系统执行策略或安全提示需要正常处理，不关闭系统保护。
+
+```powershell
+& <skill目录>\scripts\install-runtime.ps1
+daylog start
+daylog report
+daylog stop
+```
+
+后台运行在当前用户会话，默认不注册登录启动；只有 `start --login` 才写入当前用户的登录启动项。`stop` 停止记录并移除该项。Windows 首版使用低频按需 GDI 截图，原生缩小后编码 JPEG，复用去重和电池策略；锁屏、安全桌面、断开的用户会话或空闲时暂停。指定窗口只捕获当前可见、前台窗口的客户区。
+
+Windows 包和更新使用固定发布者的 RSA 签名校验，绑定版本、平台和可执行文件摘要；不要求用户安装根证书。它不等同于 Authenticode 或 SmartScreen 信誉。真实用户桌面、多屏/HDR/受保护内容和电池表现仍需要 Windows 实机验证；CI 和合成图片不能证明这些结果。实现、边界与测试见 [Windows 说明](skills/daylog/references/windows.md)。
 
 ## 在 macOS 上以什么形式运行
 
@@ -207,7 +222,7 @@ python3 scripts/install-skills.py --agent all
 
 ## GitHub 自动构建与发布
 
-- PR 和 `main` 推送：在 macOS 15 的 arm64 / Intel runner 上运行测试、构建和隔离安装验证。
+- PR 和 `main` 推送：在 macOS 15 的 arm64 / Intel runner 上运行测试、构建和隔离安装验证；Windows 2022 runner 运行 Go 测试、PowerShell 5.1/7 安装与后台/自更新验证。
 - 推送 `v0.4.0` 这样的数字版本标签：构建双架构包，生成版本固定的更新清单和轻量 skill 包，上传 Actions artifact 并创建 **Release 草稿**。
 - 也可手动运行 “Build release” workflow，传入已经存在的标签。重跑只替换同标签草稿附件；已发布版本拒绝覆盖。
 - 维护者验证后将草稿发布为正式 Release，并设为 Latest，Agent 默认安装及 `daylog update` 才会使用它。CI 不会自动开始用户录屏。
@@ -229,7 +244,7 @@ daylog config --endpoint https://api.example.com/v1/chat/completions --model VIS
 
 对应 `agent.order`、`ai.fallback_after_agents` 和 `ai.fallback_models`。不设置回退时，自定义 API 保持直接调用模式。回退仅在前一个候选失败后发生，不并行上传，也不会绕过调用/图片预算。
 
-全部候选失败才算一轮，15/30/60 分钟递增退避，最长 6 小时。首次失败后连续重试失败超过 5 次（总计第 7 轮失败）提交一次 macOS 通知，同一批次不重复打扰；是否展示横幅由系统通知设置决定。停止/取消、电源暂停和预算耗尽不计入失败轮次。`status`、`pending` 和报告均显示失败状态，报告内可以复制具体重试命令：
+全部候选失败才算一轮，15/30/60 分钟递增退避，最长 6 小时。首次失败后连续重试失败超过 5 次（总计第 7 轮失败）提交一次系统通知，同一批次不重复打扰；是否展示横幅由系统通知设置决定。停止/取消、电源暂停和预算耗尽不计入失败轮次。`status`、`pending` 和报告均显示失败状态，报告内可以复制具体重试命令：
 
 ```sh
 daylog analyze --batch 批次ID --retry
