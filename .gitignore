@@ -2,3 +2,5 @@
 /bin/
 /skills/daylog/assets/
 *.test
+ui-reference
+.DS_Store
