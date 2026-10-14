@@ -23,7 +23,7 @@ func TestMinimalInterpretationStillRequiresEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, err := deriveReport(b, in, "")
-	if err != nil || r.Cards[0].EstimatedSeconds != 270 || r.Cards[0].Category != "其他" || len(r.Cards[0].Evidence) != 1 {
+	if err != nil || r.Cards[0].EstimatedSeconds != 270 || r.Cards[0].Category != "未细分" || len(r.Cards[0].Evidence) != 1 {
 		t.Fatalf("normalization changed evidence/time: %+v %v", r, err)
 	}
 	for _, raw := range []string{`{}`, `{"segments":null}`, `{"batch_id":"wrong","segments":[]}`, `{"schema_version":1,"segments":[]}`, minimal + `{}`, `{"segments":[{"title":"x","summary":"y"}]}`, strings.Replace(minimal, b.Frames[0].ID, "unknown", -1)} {

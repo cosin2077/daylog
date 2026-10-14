@@ -34,7 +34,7 @@ func v2Batch(t *testing.T, s *Store, at time.Time) Batch {
 	return b
 }
 func v2Input(b Batch) Interpretation {
-	return Interpretation{SchemaVersion: 2, BatchID: b.ID, Segments: []Segment{{Title: "调整报告布局", Summary: "可见正在修改页面布局。", Category: "工作", Confidence: "medium", Object: "报告页面", Actions: []string{"编辑"}, Evidence: []string{b.Frames[0].ID}, Uncertainties: []string{}}}}
+	return Interpretation{SchemaVersion: 2, BatchID: b.ID, Segments: []Segment{{Title: "调整报告布局", Summary: "可见正在修改页面布局。", Category: "写代码", Confidence: "medium", Object: "报告页面", Actions: []string{"编辑"}, Evidence: []string{b.Frames[0].ID}, Uncertainties: []string{}}}}
 }
 
 func TestV2DerivesTimeWithoutBridgingGaps(t *testing.T) {

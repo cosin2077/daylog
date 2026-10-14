@@ -189,7 +189,7 @@ func inputMetadata(b Batch) []byte {
 }
 
 func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
-	r := Report{AppSource: b.AppSource, SchemaVersion: 2, Revision: 1, PromptVersion: "activity-v2.1", Model: model, BatchID: b.ID, Start: b.Start, End: b.End, Cards: []Card{}}
+	r := Report{AppSource: b.AppSource, SchemaVersion: 2, Revision: 1, PromptVersion: "activity-v2.2", Model: model, BatchID: b.ID, Start: b.Start, End: b.End, Cards: []Card{}}
 	if b.SchemaVersion != 2 || in.SchemaVersion != 2 || in.BatchID != b.ID || in.Segments == nil || len(in.Segments) > 12 {
 		return r, errors.New("invalid v2 batch or segment count")
 	}
@@ -206,11 +206,9 @@ func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
 	}
 	assigned := map[string]int{}
 	for i, g := range in.Segments {
+		g.Category = category(g.Category)
 		if strings.TrimSpace(g.Title) == "" || utf8.RuneCountInString(g.Title) > 120 || utf8.RuneCountInString(g.Summary) > 1200 || utf8.RuneCountInString(g.Object) > 240 || g.Actions == nil || g.Uncertainties == nil || len(g.Actions) > 8 || len(g.Uncertainties) > 8 || len(g.Evidence) == 0 || len(g.Evidence) > len(b.Frames) {
 			return r, errors.New("invalid segment bounds")
-		}
-		if g.Category != "工作" && g.Category != "学习" && g.Category != "沟通" && g.Category != "其他" {
-			return r, errors.New("invalid category")
 		}
 		if g.Confidence != "high" && g.Confidence != "medium" && g.Confidence != "low" {
 			return r, errors.New("invalid confidence")
@@ -256,6 +254,21 @@ func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
 	// A model may join noncontiguous evidence of a task; only adjacent compatible
 	// observations produce time. Gaps and unselected evidence never get filled.
 	labels, inferred := observationLabels(b, assigned)
+	if b.AppSource != "" {
+		for i, o := range b.Observations {
+			// App activation is a hint, not an unavailable period. It already
+			// breaks duration spans; compare the surrounding sampled tasks
+			// without inventing a task for an activation that has no picture.
+			if o.State == "active" {
+				continue
+			}
+			point := TaskObservation{At: o.At, App: o.App, MaxGapSeconds: b.MaxGapSeconds}
+			if label := labels[i]; label >= 0 && r.Cards[label].Confidence != "low" {
+				point.TaskID = r.Cards[label].TaskID
+			}
+			r.TaskObservations = append(r.TaskObservations, point)
+		}
+	}
 	var known []TimeSpan
 	for j := 1; j < len(b.Observations); j++ {
 		prev, next := b.Observations[j-1], b.Observations[j]
@@ -296,7 +309,7 @@ func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
 		Observations  []Observation
 		MaxGap        int
 		Prompt, Model string
-	}{inputMetadata(b), b.Observations, b.MaxGapSeconds, "activity-v2.1", model})
+	}{inputMetadata(b), b.Observations, b.MaxGapSeconds, "activity-v2.2", model})
 	hash := sha256.Sum256(hashData)
 	r.InputHash = hex.EncodeToString(hash[:])
 	return r, nil

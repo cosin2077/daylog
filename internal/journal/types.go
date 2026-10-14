@@ -73,20 +73,30 @@ type Card struct {
 }
 
 type Report struct {
-	AppSource      string     `json:"app_source,omitempty"`
-	SchemaVersion  int        `json:"schema_version,omitempty"`
-	Revision       int        `json:"revision,omitempty"`
-	PromptVersion  string     `json:"prompt_version,omitempty"`
-	Model          string     `json:"model,omitempty"`
-	Start          time.Time  `json:"start,omitempty"`
-	End            time.Time  `json:"end,omitempty"`
-	UnknownSeconds int64      `json:"unknown_seconds,omitempty"`
-	UnknownSpans   []TimeSpan `json:"unknown_spans,omitempty"`
-	InputHash      string     `json:"input_hash,omitempty"`
-	BatchID        string     `json:"batch_id"`
-	Source         string     `json:"source"`
-	CreatedAt      time.Time  `json:"created_at"`
-	Cards          []Card     `json:"cards"`
+	TaskObservations []TaskObservation `json:"task_observations,omitempty"`
+	AppSource        string            `json:"app_source,omitempty"`
+	SchemaVersion    int               `json:"schema_version,omitempty"`
+	Revision         int               `json:"revision,omitempty"`
+	PromptVersion    string            `json:"prompt_version,omitempty"`
+	Model            string            `json:"model,omitempty"`
+	Start            time.Time         `json:"start,omitempty"`
+	End              time.Time         `json:"end,omitempty"`
+	UnknownSeconds   int64             `json:"unknown_seconds,omitempty"`
+	UnknownSpans     []TimeSpan        `json:"unknown_spans,omitempty"`
+	InputHash        string            `json:"input_hash,omitempty"`
+	BatchID          string            `json:"batch_id"`
+	Source           string            `json:"source"`
+	CreatedAt        time.Time         `json:"created_at"`
+	Cards            []Card            `json:"cards"`
+}
+
+// Empty TaskID is a boundary (idle, missing, ambiguous or unsupported evidence).
+// These observations are not additional screenshots and do not add duration.
+type TaskObservation struct {
+	At            time.Time `json:"at"`
+	App           string    `json:"app,omitempty"`
+	TaskID        string    `json:"task_id,omitempty"`
+	MaxGapSeconds int       `json:"max_gap_seconds"`
 }
 
 type Status struct {

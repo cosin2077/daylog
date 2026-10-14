@@ -11,6 +11,8 @@ import (
 )
 
 type Activity struct {
+	LegacyCategory      string     `json:"legacy_category,omitempty"`
+	Uncertainties       []string   `json:"uncertainties,omitempty"`
 	Spans               []TimeSpan `json:"spans,omitempty"`
 	Apps                []string   `json:"apps,omitempty"`
 	InterpolatedSeconds int64      `json:"interpolated_seconds"`
@@ -63,6 +65,7 @@ type TimeBucket struct {
 }
 
 type PeriodReport struct {
+	Continuity   ContinuitySummary `json:"continuity"`
 	UnknownSpans []TimeSpan        `json:"unknown_spans,omitempty"`
 	Failures     []AnalysisFailure `json:"failures"`
 	Distribution []TimeBucket      `json:"distribution"`
@@ -191,11 +194,15 @@ func covered(spans []span) int64 {
 
 func category(raw string) string {
 	switch name := strings.TrimSpace(raw); name {
-	case "工作", "学习", "沟通", "其他":
+	case "写代码", "写东西", "查资料", "聊天沟通", "看内容", "玩游戏", "处理杂事", "未细分":
 		return name
+	case "沟通":
+		return "聊天沟通"
 	}
-	return "其他"
+	return "未细分"
 }
+
+var activityCategories = []string{"写代码", "写东西", "查资料", "聊天沟通", "看内容", "玩游戏", "处理杂事", "未细分"}
 
 func buildPeriod(kind string, anchor time.Time, reports []Report, pending []Batch, draft Batch) PeriodReport {
 	start, end, _ := PeriodBounds(kind, anchor)
@@ -249,6 +256,10 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 					until = midnight
 				}
 				a := Activity{Apps: append([]string(nil), c.Apps...), Start: from, End: until, Title: c.Title, Summary: c.Summary, Category: category(c.Category), Evidence: append([]string{}, c.Evidence...), BatchID: r.BatchID, Source: r.Source, TaskID: c.TaskID, ActivityID: c.ActivityID, DurationMethod: c.DurationMethod, Confidence: c.Confidence}
+				a.Uncertainties = append([]string(nil), c.Uncertainties...)
+				if c.Category != a.Category {
+					a.LegacyCategory = c.Category
+				}
 				day := from.Format("2006-01-02")
 				var parts []span
 				if r.SchemaVersion == 2 {
@@ -336,7 +347,7 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 		}
 		p.Days = append(p.Days, DaySummary{Date: key, Activities: dayCount[key], CoverageSeconds: seconds, PendingBatches: dayPending[key]})
 	}
-	for _, name := range []string{"工作", "学习", "沟通", "其他"} {
+	for _, name := range activityCategories {
 		p.Categories = append(p.Categories, CategorySummary{Name: name, Count: counts[name], EstimatedSeconds: covered(append([]span(nil), categorySpans[name]...))})
 	}
 	// Bucket only actual observation spans. Never spread card bounding time
@@ -351,7 +362,7 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 		}
 		bucket := TimeBucket{Start: at, End: until, Categories: []CategorySummary{}}
 		var all []span
-		for _, name := range []string{"工作", "学习", "沟通", "其他"} {
+		for _, name := range activityCategories {
 			var parts []span
 			for _, part := range categorySpans[name] {
 				if clipped, ok := clipSpan(TimeSpan{Start: part.start, End: part.end}, at, until); ok {
@@ -382,6 +393,7 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 		}
 		p.Summary = fmt.Sprintf("主要涉及%s；观察可支持的活动估计约 %d 分钟，已分析批次内另有约 %d 分钟无法判断。", strings.Join(names, "、"), p.EstimatedSeconds/60, p.UnknownSeconds/60)
 	}
+	p.Continuity = buildContinuity(start, end, reports)
 	return p
 }
 

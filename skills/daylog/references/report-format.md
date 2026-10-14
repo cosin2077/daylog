@@ -13,7 +13,7 @@ Use actual batch/frame IDs and optional task IDs from `batch.context`. Return th
   "segments": [{
     "title": "调整报告布局",
     "summary": "可见正在编辑布局并查看预览；无法确认完成。",
-    "category": "工作",
+    "category": "写代码",
     "object": "报告页面",
     "actions": ["编辑", "预览"],
     "confidence": "medium",
@@ -24,7 +24,9 @@ Use actual batch/frame IDs and optional task IDs from `batch.context`. Return th
 }
 ```
 
-Up to 12 segments. Each needs unique known screenshot evidence; a frame can belong to only one segment. Omit unidentifiable frames, or return `segments: []` if none can be identified. Confidence is high/medium/low; category is 工作/学习/沟通/其他. Link only a task from the supplied context with continuity evidence; leave task_id empty for a new task. Low confidence cannot reuse a task ID. Titles <=120 characters, summaries <=1200, object <=240; actions/uncertainties <=8 items of <=240 characters. Only title, summary and evidence are required per segment. Optional arrays default to empty; omitted category defaults to 其他, confidence to medium. Schema version and batch ID may be omitted for automatic analysis because the invocation supplies them; manual `commit --file` still needs batch_id for routing. Plain JSON and JSON/unlabelled Markdown code fences are accepted. Extra fields are ignored and cannot set timestamps or durations. Unknown frame IDs, missing evidence, conflicting batch IDs and cross-segment evidence reuse still fail.
+Up to 12 segments. Each needs unique known screenshot evidence; a frame can belong to only one segment. Omit unidentifiable frames, or return `segments: []` if none can be identified. Confidence is high/medium/low; category is 写代码/写东西/查资料/聊天沟通/看内容/玩游戏/处理杂事/未细分. Link only a task from the supplied context with continuity evidence; leave task_id empty for a new task. Low confidence cannot reuse a task ID. Titles <=120 characters, summaries <=1200, object <=240; actions/uncertainties <=8 items of <=240 characters. Only title, summary and evidence are required per segment. Optional arrays default to empty; omitted category defaults to 未细分, confidence to medium. Schema version and batch ID may be omitted for automatic analysis because the invocation supplies them; manual `commit --file` still needs batch_id for routing. Plain JSON and JSON/unlabelled Markdown code fences are accepted. Extra fields are ignored and cannot set timestamps or durations. Unknown frame IDs, missing evidence, conflicting batch IDs and cross-segment evidence reuse still fail.
+
+Keep brief unrelated chat, feeds or games as separate tasks even if only one frame shows them; do not absorb them into a broad work segment. Classify visible content, not app names. A browser may show coding, research or feeds; WeChat is not evidence of entertainment by itself. Reuse a supplied task_id when concrete evidence shows a return to that same task.
 
 The CLI computes time from local observations, preserves unknown intervals and assigns IDs. Never fill gaps or infer completed work. Commit through `daylog commit --file ...`, then reread the report. Repeating a commit refuses overwrite. Use `daylog prompt` for current v2 instructions.
 
