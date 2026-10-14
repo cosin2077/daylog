@@ -129,7 +129,7 @@ func RunProcess(cmd *exec.Cmd) error {
 	if _, e = windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); e != nil {
 		return e
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_SUSPENDED}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_SUSPENDED | windows.BELOW_NORMAL_PRIORITY_CLASS}
 	var canceled atomic.Bool
 	cmd.Cancel = func() error { canceled.Store(true); return windows.TerminateJobObject(job, 1) }
 	if e = cmd.Start(); e != nil {

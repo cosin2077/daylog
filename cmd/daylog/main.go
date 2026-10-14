@@ -88,6 +88,9 @@ func flags(name string) *flag.FlagSet {
 }
 
 func execute(args []string) error {
+	if exe, err := os.Executable(); err == nil {
+		update.CleanupStaging(exe)
+	}
 	root, err := journal.DefaultRoot()
 	if err != nil {
 		return err

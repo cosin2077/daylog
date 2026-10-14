@@ -35,6 +35,8 @@ try:
         before=(data/'config.json').read_bytes()
         result=json.loads(run([exe,'--data',data,'update','--source',manifest,'--force','--json']))
         assert result['state']=='updated'
+        run([exe,'version'])
+        assert not list(target.glob('.daylog-update-*'))
         digest=hashlib.sha256(exe.read_bytes()).hexdigest()
         # Binding the binary to a version prevents a feed from relabelling it.
         feed['version']='999.0.0';manifest.write_text(json.dumps(feed))

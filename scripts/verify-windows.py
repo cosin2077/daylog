@@ -102,6 +102,7 @@ try:
     check=json.loads(cli('update','--force','--json'))
     assert check['state']=='updated' and json.loads(cli('version','--json'))['version']==version
     assert config.read_bytes()==config_before
+    assert not list(install.glob('.daylog-update-*')), 'completed update staging was not cleaned'
     result['self_update_same_version']=True
     # Per-user daemon launch in the runner session. Analysis stays disabled;
     # a locked/service session is expected to skip native screenshots.

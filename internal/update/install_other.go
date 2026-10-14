@@ -10,3 +10,5 @@ import (
 func installWindows(context.Context, string, string, string, bool, func() error) (Check, error) {
 	return Check{}, errors.New("Windows update unavailable on this OS")
 }
+
+func CleanupStaging(string) {}

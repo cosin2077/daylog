@@ -43,7 +43,20 @@ func installWindows(ctx context.Context, source, currentExe, currentVersion stri
 	keep := false
 	defer func() {
 		if !keep {
-			os.RemoveAll(stage)
+			if e := os.RemoveAll(stage); e != nil {
+				// Only a successful replacement gets a cleanup receipt. A failed
+				// rollback retains recovery data without marking it disposable.
+				if _, e = os.Stat(currentExe); e == nil {
+					if entries, e := os.ReadDir(stage); e == nil && len(entries) == 1 && entries[0].Name() == "previous.exe" {
+						raw, e := os.ReadFile(currentExe)
+						if e == nil {
+							digest := sha256.Sum256(raw)
+							receipt, _ := json.Marshal(cleanupReceipt{Target: filepath.Base(currentExe), SHA256: hex.EncodeToString(digest[:])})
+							_ = os.WriteFile(filepath.Join(stage, "cleanup.json"), receipt, 0600)
+						}
+					}
+				}
+			}
 		}
 	}()
 	a := feed.Artifacts[check.Platform]
@@ -112,4 +125,55 @@ func installWindows(ctx context.Context, source, currentExe, currentVersion stri
 		return check, errors.New("replacement failed; previous executable restored")
 	}
 	return check, nil
+}
+
+type cleanupReceipt struct {
+	Target string `json:"target"`
+	SHA256 string `json:"sha256"`
+}
+
+// Do not scan user data or schedule privileged reboot-time deletions. Remove
+// only our exact post-update leftovers once the old image is no longer mapped.
+func CleanupStaging(executable string) {
+	parent := filepath.Dir(executable)
+	entries, e := os.ReadDir(parent)
+	if e != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !strings.HasPrefix(entry.Name(), ".daylog-update-") {
+			continue
+		}
+		dir := filepath.Join(parent, entry.Name())
+		files, e := os.ReadDir(dir)
+		if e != nil || len(files) != 2 {
+			continue
+		}
+		valid := true
+		for _, f := range files {
+			if f.Type()&os.ModeSymlink != 0 || f.IsDir() || (f.Name() != "previous.exe" && f.Name() != "cleanup.json") {
+				valid = false
+			}
+		}
+		if !valid {
+			continue
+		}
+		var receipt cleanupReceipt
+		raw, e := os.ReadFile(filepath.Join(dir, "cleanup.json"))
+		if e != nil || len(raw) > 4096 || json.Unmarshal(raw, &receipt) != nil || receipt.Target != filepath.Base(executable) {
+			continue
+		}
+		binary, e := os.ReadFile(executable)
+		if e != nil {
+			continue
+		}
+		digest := sha256.Sum256(binary)
+		if receipt.SHA256 != hex.EncodeToString(digest[:]) {
+			continue
+		}
+		if os.Remove(filepath.Join(dir, "previous.exe")) == nil {
+			os.Remove(filepath.Join(dir, "cleanup.json"))
+			os.Remove(dir)
+		}
+	}
 }
