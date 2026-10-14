@@ -101,7 +101,7 @@ func (Desktop) Environment(ctx context.Context) (Environment, error) {
 		return Environment{}, e
 	}
 	startPowerObserver()
-	env := Environment{Permission: true, BatteryPercent: 100, Thermal: -1, Locked: !desktopAvailable(), ScreenOff: displayOff.Load()}
+	env := Environment{Permission: true, BatteryPercent: -1, Thermal: -1, Locked: !desktopAvailable(), ScreenOff: displayOff.Load()}
 	if !env.Locked {
 		h, _, _ := foreground.Call()
 		env.App = windowApp(h)
@@ -124,9 +124,11 @@ func (Desktop) Environment(ctx context.Context) (Environment, error) {
 	if power.Percent <= 100 {
 		env.BatteryPercent = int(power.Percent)
 	}
-	env.LowPower = power.Saver == 1
+	env.LowPower = power.Saver == 1 || power.Battery != 255 && power.Battery&2 != 0
 	if power.Battery != 255 && power.Battery&4 != 0 {
-		env.BatteryPercent = min(env.BatteryPercent, 10)
+		if env.BatteryPercent < 0 || env.BatteryPercent > 10 {
+			env.BatteryPercent = 10
+		}
 	}
 	return env, nil
 }
