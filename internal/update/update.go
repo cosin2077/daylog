@@ -321,6 +321,11 @@ func verifyApp(ctx context.Context, path, version string, allowAdHoc bool) error
 }
 
 func developmentSource(source string) bool {
+	// url.Parse treats a Windows drive letter as a URI scheme. Accept explicit
+	// filesystem paths here, but never a UNC network share as a local test feed.
+	if filepath.IsAbs(source) {
+		return !strings.HasPrefix(source, `\\`) && !strings.HasPrefix(source, "//")
+	}
 	u, err := url.Parse(source)
 	if err != nil {
 		return false

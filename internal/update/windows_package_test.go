@@ -12,9 +12,19 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
+
+func TestWindowsDevelopmentSourceRecognizesDrivePaths(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path rules")
+	}
+	if !developmentSource(`C:\fixture\release.json`) || developmentSource(`\\server\share\release.json`) || developmentSource(`C:relative.json`) {
+		t.Fatal("local drive paths and network/drive-relative paths were confused")
+	}
+}
 
 func TestWindowsPublisherSignatureBindsVersionPlatformAndDigest(t *testing.T) {
 	key, e := rsa.GenerateKey(rand.Reader, 2048)
