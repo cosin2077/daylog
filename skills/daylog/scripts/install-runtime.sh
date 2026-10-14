@@ -4,6 +4,8 @@ set -eu
 daylog_apps="$HOME/Applications"
 daylog_bin="$HOME/.local/bin"
 daylog_data=""
+daylog_signer_sha1='f9a0d212408ba29b5b926703fe5f1625efb7f884'
+daylog_signer_sha256='f584d5714076f3f3432d3a431b07b0b607d9d1d863c099859fd121cb4a7dc67f'
 daylog_source='https://github.com/cosin2077/daylog/releases/latest/download/release.json'
 while [ $# -gt 0 ]; do
   [ $# -ge 2 ] || { echo 'Options require a value.' >&2; exit 1; }
@@ -77,29 +79,50 @@ if [ -e "$daylog_bin/daylog" ] || [ -L "$daylog_bin/daylog" ]; then
     echo 'The command daylog belongs to another installation; nothing was overwritten.' >&2; exit 1;
   }
 fi
+# Validate the downloaded app before invoking even an older installed updater.
+daylog_archive="$daylog_temp/app.tar.gz"
+daylog_fetch "$daylog_url" "$daylog_archive" 33554432
+daylog_actual=$(shasum -a 256 "$daylog_archive" | /usr/bin/awk '{print $1}')
+[ "$daylog_actual" = "$daylog_hash" ] || { echo 'Release checksum mismatch; nothing installed.' >&2; exit 1; }
+# Reject traversal, links, special entries and excessive expanded size first.
+/usr/bin/tar -tzf "$daylog_archive" > "$daylog_temp/paths"
+/usr/bin/awk 'BEGIN {bad=0} /\\|(^|\/)\.\.?(\/|$)/ {bad=1} !/^Daylog[.]app(\/|$)/ {bad=1} END {exit (bad || NR>1024 || NR==0)}' "$daylog_temp/paths" || { echo 'Unsafe archive paths.' >&2; exit 1; }
+/usr/bin/tar -tvzf "$daylog_archive" > "$daylog_temp/entries"
+/usr/bin/awk 'substr($1,1,1)!="-" && substr($1,1,1)!="d" {bad=1} $5 !~ /^[0-9]+$/ {bad=1} {size+=$5} END {exit (bad || size>67108864)}' "$daylog_temp/entries" || { echo 'Unsafe archive entries or size.' >&2; exit 1; }
+daylog_stage=$(mktemp -d "$daylog_apps/.daylog-install.XXXXXX")
+/usr/bin/tar -xzf "$daylog_archive" -C "$daylog_stage"
+daylog_app="$daylog_stage/Daylog.app"
+/usr/bin/codesign --verify --deep --strict "$daylog_app"
+[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$daylog_app/Contents/Info.plist")" = io.daylog.agent ] || { echo 'App identity mismatch.' >&2; exit 1; }
+[ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$daylog_app/Contents/Info.plist")" = "$daylog_version" ] || { echo 'App version mismatch.' >&2; exit 1; }
+/usr/bin/lipo "$daylog_app/Contents/MacOS/daylog" -verify_arch "$daylog_macho"
+
+daylog_development_source() {
+  case "$1" in
+    /*) return 0 ;;
+    http://*) printf '%s\n' "$1" | /usr/bin/grep -Eq '^http://(127\.0\.0\.1|localhost):[0-9]+/' ;;
+    *) return 1 ;;
+  esac
+}
+daylog_is_development=false
+if [ "${DAYLOG_DEVELOPMENT_INSTALL:-}" = 1 ] && daylog_development_source "$daylog_source" && daylog_development_source "$daylog_url"; then
+  if /usr/bin/codesign -d --verbose=2 "$daylog_app" 2>&1 | /usr/bin/grep -qx 'Signature=adhoc'; then daylog_is_development=true; fi
+fi
+if [ "$daylog_is_development" != true ]; then
+  /usr/bin/codesign --verify --deep --strict -R "=identifier \"io.daylog.agent\" and certificate leaf = H\"$daylog_signer_sha1\"" "$daylog_app"
+  /usr/bin/codesign -d --extract-certificates="$daylog_temp/signer" "$daylog_app" 2>/dev/null
+  daylog_actual_signer=$(shasum -a 256 "$daylog_temp/signer0" | /usr/bin/awk '{print $1}')
+  [ "$daylog_actual_signer" = "$daylog_signer_sha256" ] || { echo 'Release publisher identity mismatch; nothing installed.' >&2; exit 1; }
+fi
 if [ -e "$daylog_target" ] || [ -L "$daylog_target" ]; then
   [ ! -L "$daylog_target" ] && [ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$daylog_target/Contents/Info.plist")" = io.daylog.agent ] || {
     echo 'Daylog.app belongs to another application; nothing was overwritten.' >&2; exit 1;
   }
   /usr/bin/codesign --verify --deep --strict "$daylog_target"
-  case "$daylog_source" in https://*|http://*) daylog_cli update --source "$daylog_manifest" >/dev/null ;; *) daylog_cli update --source "$daylog_source" >/dev/null ;; esac
+  # Use the already validated archive, avoiding a second mutable download.
+  /usr/bin/plutil -replace "artifacts.darwin-$daylog_arch.url" -string app.tar.gz "$daylog_manifest"
+  daylog_cli update --source "$daylog_manifest" >/dev/null
 else
-  daylog_archive="$daylog_temp/app.tar.gz"
-  daylog_fetch "$daylog_url" "$daylog_archive" 33554432
-  daylog_actual=$(shasum -a 256 "$daylog_archive" | /usr/bin/awk '{print $1}')
-  [ "$daylog_actual" = "$daylog_hash" ] || { echo 'Release checksum mismatch; nothing installed.' >&2; exit 1; }
-  # Reject traversal, links, special entries and excessive expanded size first.
-  /usr/bin/tar -tzf "$daylog_archive" > "$daylog_temp/paths"
-  /usr/bin/awk 'BEGIN {bad=0} /\\|(^|\/)\.\.?(\/|$)/ {bad=1} !/^Daylog[.]app(\/|$)/ {bad=1} END {exit (bad || NR>1024 || NR==0)}' "$daylog_temp/paths" || { echo 'Unsafe archive paths.' >&2; exit 1; }
-  /usr/bin/tar -tvzf "$daylog_archive" > "$daylog_temp/entries"
-  /usr/bin/awk 'substr($1,1,1)!="-" && substr($1,1,1)!="d" {bad=1} $5 !~ /^[0-9]+$/ {bad=1} {size+=$5} END {exit (bad || size>67108864)}' "$daylog_temp/entries" || { echo 'Unsafe archive entries or size.' >&2; exit 1; }
-  daylog_stage=$(mktemp -d "$daylog_apps/.daylog-install.XXXXXX")
-  /usr/bin/tar -xzf "$daylog_archive" -C "$daylog_stage"
-  daylog_app="$daylog_stage/Daylog.app"
-  /usr/bin/codesign --verify --deep --strict "$daylog_app"
-  [ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$daylog_app/Contents/Info.plist")" = io.daylog.agent ] || { echo 'App identity mismatch.' >&2; exit 1; }
-  [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$daylog_app/Contents/Info.plist")" = "$daylog_version" ] || { echo 'App version mismatch.' >&2; exit 1; }
-  /usr/bin/lipo "$daylog_app/Contents/MacOS/daylog" -verify_arch "$daylog_macho"
   mv "$daylog_app" "$daylog_target"
 fi
 if [ ! -L "$daylog_bin/daylog" ]; then ln -s "$daylog_exec" "$daylog_bin/daylog"; fi

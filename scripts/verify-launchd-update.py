@@ -16,6 +16,7 @@ import tempfile
 import time
 
 repo = Path(__file__).resolve().parents[1]
+os.environ['DAYLOG_DEVELOPMENT_INSTALL'] = '1'
 root = Path(tempfile.mkdtemp(prefix="daylog-launchd-update-", dir="/tmp"))
 data = root / "data"
 exe = root / "bin/daylog"

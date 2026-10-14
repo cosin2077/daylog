@@ -33,12 +33,12 @@ daylog stop     # 停止记录
 
 1. 确认系统为 macOS 14+。获取本仓库的 `skills/daylog`，或下载 [最新 Release 的轻量 skill 包](https://github.com/cosin2077/daylog/releases/latest/download/daylog-skill.tar.gz)。获取不到时检查 [Releases](https://github.com/cosin2077/daylog/releases)，草稿或预发布不属于默认 latest。尚无正式 Release 时明确告知，不要自动要求用户安装编译工具。
 2. 将 skill 放到当前 Agent 的目录：Codex 为 `~/.agents/skills/daylog`，Claude Code 为 `~/.claude/skills/daylog`，Hermes 为 `~/.hermes/skills/daylog`。源码仓库提供 `python3 scripts/install-skills.py --agent codex`（按当前 Agent 修改）；也可直接复制目录，不要求用户安装 Python。目标已存在时比较并保留用户修改。
-3. 从安装后的 skill 目录执行 `sh scripts/install-runtime.sh`。它读取正式 Release 清单、检测 Apple Silicon / Intel，只下载匹配的二进制包，校验 SHA-256、包路径、App 签名完整性、版本和架构后安装；已有安装通过更新器升级并保留配置和日记。
+3. 从安装后的 skill 目录执行 `sh scripts/install-runtime.sh`。它读取正式 Release 清单、检测 Apple Silicon / Intel，只下载匹配的二进制包，校验 SHA-256、包路径、固定发布证书、App 签名完整性、版本和架构后安装；已有安装通过更新器升级并保留配置和日记。
 4. 验证 `~/.local/bin/daylog version` 和 `~/.local/bin/daylog -h`，告知安装版本。安装到此完成；只有用户要求开始记录时才执行 `daylog start`，macOS 授权由本人完成。
 
 应用安装到 `~/Applications/Daylog.app`，命令链接到 `~/.local/bin/daylog`。预编译运行时的安装不需要 Go、Node、Python 或包管理器；skill 安装脚本只是可选便利工具。
 
-维护者离线测试：先运行 `sh scripts/build.sh --all-arches`，再从 skill 目录执行 `sh scripts/install-runtime.sh --source "$PWD/assets/release.json"`。此模式使用本地包和更新源；普通用户保持默认在线方式。
+维护者离线测试：先运行 `DAYLOG_DEVELOPMENT_BUILD=1 sh scripts/build.sh --all-arches`，再从 skill 目录执行 `DAYLOG_DEVELOPMENT_INSTALL=1 sh scripts/install-runtime.sh --source "$PWD/assets/release.json"`。此模式使用本地包和更新源；普通用户保持默认在线方式。
 
 </details>
 
@@ -48,9 +48,9 @@ daylog stop     # 停止记录
 daylog update
 ```
 
-默认更新源是 GitHub 最新正式 Release 的 `release.json`，首次正式 Release 发布后可用。清单中的二进制 URL 固定到版本标签；`--source` 可用于维护者的本地验证。更新已有 SHA-256、签名完整性、版本/架构校验与替换失败回退，但尚不具备正式发行级保障：没有签名清单/固定发布者校验，两个目录重命名之间存在崩溃窗口，更新后启动失败也不会自动回滚。它由命令触发，没有后台定时更新。
+默认更新源是 GitHub 最新正式 Release 的 `release.json`，首次正式 Release 发布后可用。清单中的二进制 URL 固定到版本标签；`--source` 可用于维护者的本地验证。更新验证 SHA-256、固定发布证书、签名完整性和版本/架构，校验通过后才停止旧进程。清单本身尚未独立签名；两个目录重命名之间仍存在崩溃窗口，启动失败也不会自动回滚。它由命令触发，没有后台定时更新。
 
-本地开发签名更新可能使录屏权限失效；`daylog start` 会检查并引导重新授权。当前 workflow 仍使用开发签名；Developer ID 签名及公证尚待配置。
+正式构建使用同一张长期自签名代码签名证书。已在本机验证：0.5.0→0.5.1 的二进制发生变化，录屏授权保留且成功截图，无需再次授权。从旧版临时签名迁移时可能需要授权一次。此签名不是 Apple Developer ID，尚无 Apple 公证，首次安装仍可能有系统安全提示。用户无需安装根证书或关闭系统安全功能。维护流程见 [固定签名说明](docs/signing.md)。
 
 ## 自定义 LLM（可选）
 
@@ -128,7 +128,9 @@ daylog report --no-open                  # 只生成 HTML
 daylog report --from 2026-10-13T14:00:00+08:00 --to 2026-10-13T16:00:00+08:00 --json
 ```
 
-生成后是静态快照，页面会显示生成时间和刷新提示；`status` 也会提示已有新分析结果。新活动需要重新运行 `daylog report` 才会更新。[示例报告](dist/daylog-report-demo.html) 使用演示数据。
+生成后是静态快照，页面会显示生成时间和刷新提示；`status` 也会提示已有新分析结果。新活动需要重新运行 `daylog report` 才会更新。下图使用演示数据。
+
+![Daylog 每日复盘报告](docs/assets/report-preview.jpg)
 
 ## 省资源的默认行为
 
@@ -191,7 +193,7 @@ python3 scripts/install-skills.py --agent all
 
 高级设置、自定义 API、指定窗口和排障见 [命令参考](skills/daylog/references/commands.md) 或 `daylog help --advanced`。默认不启用登录启动；需要时使用 `daylog start --login`，`daylog stop` 会一并关闭它。
 
-开发：`go test -race ./...`、`go vet ./...`、`sh scripts/build.sh --all-arches`。实测范围见 [验证记录](VALIDATION.md)。
+开发：`go test -race ./...`、`go vet ./...`、`DAYLOG_DEVELOPMENT_BUILD=1 sh scripts/build.sh --all-arches`。实测范围见 [验证记录](VALIDATION.md)。
 
 图标源文件为 [daylog.svg](assets/icon/daylog.svg)，修改后在 macOS 执行 `sh scripts/build-icon.sh`（需要本机 `rsvg-convert`）重新生成 PNG / ICNS。普通构建直接使用仓库内的 ICNS，不增加安装或运行依赖。
 
@@ -228,3 +230,5 @@ daylog analyze --batch 批次ID --retry
 报告的时间分布、类别占比、活动时间线和主要任务均来自已保存结果。分类按可估算时间统计，旧模型时段与未知时间单独提示；HTML 是离线快照，复制重试命令后需要在终端执行，再运行 `daylog report` 刷新。
 
 系统通知默认开启，可用 `daylog config --notifications=false` 关闭，或设置 `diagnostics.failure_notifications: false`。开关不影响重试、状态、日志及报告中的失败提示；修改后重启后台生效。
+
+新版报告提供日期导航、日／周／月视图、实际观察区间的时间分布、任务排行和表格时间线。可搜索活动、摘要或应用，展开查看截图依据。未确认区间通过独立筛选查看，不冒充活动。日期导航限于快照包含的日期；其他月份可通过 `report --date YYYY-MM-DD` 生成。今日总结由已保存的分析结果和统计组成，生成报告不会新增 LLM 请求。

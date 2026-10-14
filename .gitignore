@@ -4,3 +4,9 @@
 *.test
 ui-reference
 .DS_Store
+
+*.p12
+
+*.keychain-db
+
+private-key.pem

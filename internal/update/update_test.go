@@ -7,9 +7,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -38,6 +41,90 @@ func archiveFixture(t *testing.T, name string, kind byte) string {
 	gz.Close()
 	file.Close()
 	return path
+}
+
+func TestDevelopmentFeedCannotBePublic(t *testing.T) {
+	for _, source := range []string{"https://github.com/owner/repo/release.json", "http://127.0.0.1.evil/release.json", "file:///tmp/release.json"} {
+		if developmentSource(source) {
+			t.Fatal("public or unsupported feed accepted as development")
+		}
+	}
+	for _, source := range []string{"/tmp/release.json", "http://127.0.0.1:1234/release.json"} {
+		if !developmentSource(source) {
+			t.Fatal("local development feed rejected")
+		}
+	}
+}
+
+func TestValidAdHocSignatureCannotReplacePinnedRelease(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("requires macOS codesign")
+	}
+	dir := t.TempDir()
+	app := filepath.Join(dir, "Daylog.app")
+	os.MkdirAll(filepath.Join(app, "Contents", "MacOS"), 0700)
+	executable, _ := os.Executable()
+	data, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(app, "Contents", "MacOS", "daylog"), data, 0700)
+	os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>io.daylog.agent</string><key>CFBundleExecutable</key><string>daylog</string><key>CFBundleShortVersionString</key><string>9.0.0</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`), 0600)
+	if out, err := exec.Command("/usr/bin/codesign", "--force", "--sign", "-", app).CombinedOutput(); err != nil {
+		t.Fatalf("fixture signing: %s", out)
+	}
+	if err := verifyPublisher(context.Background(), app, false); err == nil {
+		t.Fatal("untrusted signer accepted")
+	}
+	if err := verifyPublisher(context.Background(), app, true); err != nil {
+		t.Fatal("explicit development signature rejected")
+	}
+	archive, err := os.Create(filepath.Join(dir, "app.tar.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(archive)
+	tw := tar.NewWriter(gz)
+	err = filepath.Walk(app, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name, _ = filepath.Rel(dir, path)
+		if err = tw.WriteHeader(header); err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			_, err = io.Copy(tw, f)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw.Close()
+	gz.Close()
+	archive.Close()
+	blob, _ := os.ReadFile(filepath.Join(dir, "app.tar.gz"))
+	sum := sha256.Sum256(blob)
+	feed := Feed{Version: "9.0.0", Artifacts: map[string]Artifact{runtime.GOOS + "-" + runtime.GOARCH: {URL: "app.tar.gz", SHA256: hex.EncodeToString(sum[:])}}}
+	raw, _ := json.Marshal(feed)
+	manifest := filepath.Join(dir, "release.json")
+	os.WriteFile(manifest, raw, 0600)
+	stopped := false
+	_, err = Install(context.Background(), manifest, app, "8.0.0", false, func() error { stopped = true; return nil })
+	if err == nil || !strings.Contains(err.Error(), "publisher") || stopped {
+		t.Fatalf("wrong signer reached replacement: %v stopped=%v", err, stopped)
+	}
 }
 func TestArchiveRejectsTraversalAndLinks(t *testing.T) {
 	for _, tc := range []struct {

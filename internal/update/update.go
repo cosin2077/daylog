@@ -2,10 +2,13 @@ package update
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"debug/macho"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -37,6 +40,15 @@ type Check struct {
 	Platform  string `json:"platform"`
 	Upgrade   bool   `json:"upgrade_available"`
 }
+
+// Production builds pin the complete public certificate. Neither a remote
+// manifest nor runtime environment variables can replace this identity.
+//
+//go:embed signing-certificate.der
+var signingCertificate []byte
+
+// Set only by an explicit development build; never in release builds.
+var developmentBuild = "false"
 
 var semver = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
@@ -192,7 +204,7 @@ func Install(ctx context.Context, source, currentApp, currentVersion string, for
 		return check, err
 	}
 	newApp := filepath.Join(temp, "Daylog.app")
-	if err = verifyApp(ctx, newApp, feed.Version); err != nil {
+	if err = verifyApp(ctx, newApp, feed.Version, developmentBuild == "true" && developmentSource(source)); err != nil {
 		return check, err
 	}
 	if beforeSwap != nil {
@@ -280,9 +292,12 @@ func extract(archive, directory string) error {
 	}
 }
 
-func verifyApp(ctx context.Context, path, version string) error {
+func verifyApp(ctx context.Context, path, version string, allowAdHoc bool) error {
 	if exec.CommandContext(ctx, "/usr/bin/codesign", "--verify", "--deep", "--strict", path).Run() != nil {
 		return errors.New("app code signature verification failed")
+	}
+	if err := verifyPublisher(ctx, path, allowAdHoc); err != nil {
+		return err
 	}
 	plist := filepath.Join(path, "Contents", "Info.plist")
 	for key, expected := range map[string]string{"CFBundleIdentifier": "io.daylog.agent", "CFBundleShortVersionString": version} {
@@ -298,6 +313,51 @@ func verifyApp(ctx context.Context, path, version string) error {
 	defer binary.Close()
 	if runtime.GOARCH == "arm64" && binary.Cpu != macho.CpuArm64 || runtime.GOARCH == "amd64" && binary.Cpu != macho.CpuAmd64 {
 		return errors.New("update executable architecture mismatch")
+	}
+	return nil
+}
+
+func developmentSource(source string) bool {
+	u, err := url.Parse(source)
+	if err != nil {
+		return false
+	}
+	if u.Scheme == "" {
+		return true
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	ip := net.ParseIP(u.Hostname())
+	return u.Hostname() == "localhost" || ip != nil && ip.IsLoopback()
+}
+
+func verifyPublisher(ctx context.Context, app string, allowAdHoc bool) error {
+	if allowAdHoc {
+		details, err := exec.CommandContext(ctx, "/usr/bin/codesign", "-d", "--verbose=2", app).CombinedOutput()
+		if err == nil && strings.Contains("\n"+string(details), "\nSignature=adhoc\n") {
+			return nil
+		}
+	}
+	// Apple requirement syntax uses SHA-1 certificate identifiers; the full
+	// DER comparison below additionally pins the exact certificate bytes.
+	fingerprint := sha1.Sum(signingCertificate)
+	requirement := `=identifier "io.daylog.agent" and certificate leaf = H"` + hex.EncodeToString(fingerprint[:]) + `"`
+	if exec.CommandContext(ctx, "/usr/bin/codesign", "--verify", "--deep", "--strict", "-R", requirement, app).Run() != nil {
+		return errors.New("update publisher identity mismatch; installed app was not changed")
+	}
+	dir, err := os.MkdirTemp("", "daylog-signer-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	prefix := filepath.Join(dir, "cert")
+	if exec.CommandContext(ctx, "/usr/bin/codesign", "-d", "--extract-certificates="+prefix, app).Run() != nil {
+		return errors.New("update signing certificate unavailable")
+	}
+	cert, err := os.ReadFile(prefix + "0")
+	if err != nil || !bytes.Equal(cert, signingCertificate) {
+		return errors.New("update signing certificate does not match pinned publisher")
 	}
 	return nil
 }

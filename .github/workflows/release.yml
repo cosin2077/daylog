@@ -40,8 +40,11 @@ jobs:
           cache: false
       - run: go test -race ./...
       - run: go vet ./...
-      - name: Build both architectures
-        run: DAYLOG_VERSION="${RELEASE_TAG#v}" sh scripts/build.sh --all-arches
+      - name: Build both architectures with fixed publisher identity
+        env:
+          DAYLOG_SIGNING_P12_BASE64: ${{ secrets.DAYLOG_SIGNING_P12_BASE64 }}
+          DAYLOG_SIGNING_PASSWORD: ${{ secrets.DAYLOG_SIGNING_PASSWORD }}
+        run: DAYLOG_VERSION="${RELEASE_TAG#v}" python3 scripts/with-signing.py -- sh scripts/build.sh --all-arches
       - run: python3 scripts/verify-runtime.py --skip-native-check
       - run: python3 scripts/verify-installer.py
       - name: Prepare release assets

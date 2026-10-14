@@ -8,6 +8,8 @@ import plistlib
 import re
 import shutil
 import tarfile
+import tempfile
+import subprocess
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--version', required=True)
@@ -32,6 +34,12 @@ for arch in ('arm64', 'amd64'):
         info = plistlib.loads(package.extractfile('Daylog.app/Contents/Info.plist').read())
         if info['CFBundleShortVersionString'] != args.version or info['CFBundleIdentifier'] != 'io.daylog.agent':
             parser.error(f'bundle version/identity mismatch: {name}')
+
+    # Public releases must never contain a development/ad-hoc package.
+    with tempfile.TemporaryDirectory(prefix='daylog-release-signature-') as directory:
+        with tarfile.open(assets / name) as package:
+            package.extractall(directory, filter='data')
+        subprocess.run(['python3', str(root/'scripts/verify-signer.py'), str(Path(directory)/'Daylog.app')], check=True)
 
 output = root / 'dist/release'
 if output.exists():

@@ -14,7 +14,8 @@ func main() {
 	if len(os.Args) != 2 {
 		panic("usage: go run ./scripts/report-demo OUTPUT.html")
 	}
-	anchor := time.Date(2026, 10, 13, 0, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*3600))
+	now := time.Now()
+	anchor := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
 	tasks := []struct{ title, summary, category string }{
 		{"梳理轻量记录工具的交互流程", "围绕安装、开始记录与查看报告整理操作路径，在文档中补充了首次授权和默认行为的说明。", "工作"},
 		{"实现按日期归档的截图存储", "编辑 Go 存储模块，检查旧截图引用的兼容读取，并为日期目录补充清理与空间统计。", "工作"},
@@ -36,7 +37,8 @@ func main() {
 				task = tasks[i]
 			}
 			id := journal.ID(at)
-			reports = append(reports, journal.Report{BatchID: id, Source: "agent:claude", CreatedAt: at.Add(20 * time.Minute), Cards: []journal.Card{{Start: at, End: at.Add(time.Duration(12+(i*7)%26) * time.Minute), Title: task.title, Summary: task.summary, Category: task.category, Evidence: []string{id, journal.ID(at.Add(5 * time.Minute))}}}})
+			end := at.Add(time.Duration(12+(i*7)%26) * time.Minute)
+			reports = append(reports, journal.Report{SchemaVersion: 2, AppSource: "window_server", Start: at, End: end.Add(7 * time.Minute), UnknownSpans: []journal.TimeSpan{{Start: end, End: end.Add(7 * time.Minute)}}, BatchID: id, Source: "agent:claude", CreatedAt: at.Add(20 * time.Minute), Cards: []journal.Card{{ActivityID: "act_" + id, TaskID: fmt.Sprintf("task_%d", (i+day+18)%len(tasks)), Apps: []string{"Demo Editor"}, DurationMethod: "bounded_observation_v1", Confidence: "medium", Spans: []journal.TimeSpan{{Start: at, End: end}}, Start: at, End: end, Title: task.title, Summary: task.summary, Category: task.category, Evidence: []string{id, journal.ID(at.Add(5 * time.Minute))}}}})
 		}
 	}
 	pending := []journal.Batch{{Start: anchor.Add(17 * time.Hour), End: anchor.Add(17*time.Hour + 15*time.Minute)}}

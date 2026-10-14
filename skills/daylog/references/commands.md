@@ -88,3 +88,6 @@ API fallback is opt-in: `config --api-fallback --fallback-models MODEL2` uses th
 The report now has span-derived category/time charts and task rankings. Unknown/low-confidence/legacy model intervals are excluded from observation-time charts. Distribution buckets respect report-local time, and intersect actual observation spans rather than card bounding intervals. Day/week/month tabs, search, filters, pagination, evidence expansion and print/PDF work offline without third-party assets.
 
 System failure banners are optional: `config --notifications=false` or `diagnostics.failure_notifications: false`. This does not disable retries, JSONL diagnostics or persistent status/report alerts. Restart the daemon to apply.
+
+
+Fixed-signature release builds pin the public certificate in both installer and updater. The private identity belongs only on the maintainer/build host, never on a user's machine. Development packages require explicit local/loopback-only development opt-ins and cannot pass the public release packaging checks. Current reports include a calendar of day views for the snapshot, precise observation/unknown spans, app search and a table timeline; unknown spans are available through their own filter. Summary text reuses existing results and does not imply a separate daily LLM call.

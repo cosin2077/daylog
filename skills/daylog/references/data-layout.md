@@ -48,3 +48,5 @@ Example wording, not real user data: “这段时间主要在修改报告界面�
 Only give behavioral suggestions when asked, at most two, with supporting observations. Do not infer distraction, health, mood, or ability from app switches. A normal summary request is satisfied by existing JSON; do not resubmit the screenshot library or start recording. For requested new image analysis, use the skill's pending/commit flow and the current report schema.
 
 For v0.4.1, batches/reports record app_source=window_server. Older v2 records may have cached app IDs; the overview exposes legacy_app_metadata and warns about application/time reliability. Do not silently rewrite historical app labels. Retry metadata includes failure_rounds and retry_after; attempts is a lifetime count, not a permanent three-attempt gate.
+
+Period activity entries include clipped `spans` and available `apps`, and period reports include merged `unknown_spans`. Use these exact intervals for timelines instead of spreading the activity bounding start/end across gaps. HTML additionally embeds day views for date navigation inside the snapshot; it does not fetch new data or call a model when changing dates.

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the real installer/download/update path against an isolated HTTP feed."""
+import os
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import io
@@ -12,6 +13,7 @@ import tempfile
 import threading
 
 repo = Path(__file__).resolve().parents[1]
+os.environ['DAYLOG_DEVELOPMENT_INSTALL'] = '1'
 assets = repo / 'skills/daylog/assets'
 arch = subprocess.check_output(['go', 'env', 'GOARCH'], text=True).strip()
 name = f'daylog-macos-{arch}.tar.gz'
@@ -41,11 +43,11 @@ with tempfile.TemporaryDirectory(prefix='daylog-installer-') as directory:
     worker.start()
     source = f'http://127.0.0.1:{server.server_port}/release.json'
 
-    def install(target, expected=0):
+    def install(target, expected=0, strict=False):
         p = subprocess.run(['sh', str(repo / 'skills/daylog/scripts/install-runtime.sh'),
                             '--source', source, '--apps-dir', str(target / 'Applications'),
                             '--bin-dir', str(target / 'bin'), '--data-dir', str(target / 'data')],
-                           capture_output=True, text=True, timeout=90)
+                           capture_output=True, text=True, timeout=90, env={**os.environ, "DAYLOG_DEVELOPMENT_INSTALL": "0" if strict else "1"})
         assert (p.returncode == 0) == (expected == 0), p.stderr[-1000:]
         assert not list((target / 'Applications').glob('.daylog-*'))
         return p
@@ -66,6 +68,27 @@ with tempfile.TemporaryDirectory(prefix='daylog-installer-') as directory:
         config.write_text(json.dumps(c))
         install(installed)
         assert json.loads(config.read_text())['blocked_apps'] == c['blocked_apps']
+
+        # A valid archive digest and valid ad-hoc signature are not a publisher identity.
+        original = (web / name).read_bytes()
+        forged = root / 'wrong-signer'
+        forged.mkdir()
+        with tarfile.open(web / name) as archive:
+            archive.extractall(forged, filter='data')
+        subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(forged / 'Daylog.app')], check=True, capture_output=True)
+        with tarfile.open(web / name, 'w:gz') as archive:
+            archive.add(forged / 'Daylog.app', arcname='Daylog.app')
+        wrong = json.loads(json.dumps(feed))
+        wrong['artifacts'][f'darwin-{arch}']['sha256'] = hashlib.sha256((web / name).read_bytes()).hexdigest()
+        (web / 'release.json').write_text(json.dumps(wrong))
+        prior_hash = hashlib.sha256(exe.resolve().read_bytes()).hexdigest()
+        prior_config = config.read_bytes()
+        install(root / 'untrusted-new', expected=1, strict=True)
+        install(installed, expected=1, strict=True)
+        assert hashlib.sha256(exe.resolve().read_bytes()).hexdigest() == prior_hash
+        assert config.read_bytes() == prior_config
+        (web / name).write_bytes(original)
+        (web / 'release.json').write_text(json.dumps(feed))
 
         bad = json.loads(json.dumps(feed))
         bad['artifacts'][f'darwin-{arch}']['sha256'] = '0' * 64
@@ -97,7 +120,7 @@ with tempfile.TemporaryDirectory(prefix='daylog-installer-') as directory:
         subprocess.run(['python3', str(repo / 'scripts/install-skills.py'), '--source', str(lean),
                         '--agent', 'all', '--home', str(root / 'agent-home')], check=True, capture_output=True)
         assert len(list((root / 'agent-home').rglob('SKILL.md'))) == 3
-        print('PASS: HTTP download, arch selection, persisted feed, repeated install, checksum/path/link rejection, missing-release guidance, lean skills')
+        print('PASS: HTTP download, arch selection, persisted feed, repeated install, checksum/path/link/publisher rejection, missing-release guidance, lean skills')
     finally:
         server.shutdown()
         server.server_close()

@@ -30,7 +30,7 @@ jobs:
           cache: false # standard library only; no go.sum
       - run: go test -race ./...
       - run: go vet ./...
-      - run: sh scripts/build.sh
+      - run: DAYLOG_DEVELOPMENT_BUILD=1 sh scripts/build.sh
       - name: Isolated runtime verification (no real screenshots or model calls)
         run: python3 scripts/verify-runtime.py --skip-native-check
       - name: Installer verification

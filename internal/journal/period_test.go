@@ -103,3 +103,26 @@ func TestHTMLKeepsUntrustedTextInJSONAndExcludesConfigSecrets(t *testing.T) {
 		t.Fatal("HTML report is not private")
 	}
 }
+
+func TestCalendarIncludesClippedObservationAndUnknownSpans(t *testing.T) {
+	zone := time.FixedZone("local", 8*3600)
+	anchor := time.Date(2026, 10, 14, 0, 0, 0, 0, zone)
+	r := Report{SchemaVersion: 2, AppSource: "window_server", BatchID: "fixture", Start: anchor.Add(-time.Minute), End: anchor.Add(4 * time.Minute),
+		UnknownSpans: []TimeSpan{{Start: anchor.Add(time.Minute), End: anchor.Add(3 * time.Minute)}, {Start: anchor.Add(2 * time.Minute), End: anchor.Add(4 * time.Minute)}},
+		Cards:        []Card{{Start: anchor.Add(-time.Minute), End: anchor.Add(time.Minute), Title: "编辑", Category: "工作", TaskID: "task", DurationMethod: "bounded_observation_v1", Apps: []string{"Editor"}, Spans: []TimeSpan{{Start: anchor.Add(-time.Minute), End: anchor.Add(time.Minute)}}}}}
+	o := BuildOverview(anchor, []Report{r}, nil, Batch{})
+	if len(o.Calendar) != 31 {
+		t.Fatal("date picker calendar missing")
+	}
+	day := o.Calendar[13]
+	if day.Anchor != "2026-10-14" || day.EstimatedSeconds != 60 || day.UnknownSeconds != 180 || len(day.UnknownSpans) != 1 {
+		t.Fatalf("calendar time was double-counted: %+v", day)
+	}
+	a := day.Activities[0]
+	if len(a.Spans) != 1 || !a.Spans[0].Start.Equal(anchor) || len(a.Apps) != 1 || a.Apps[0] != "Editor" {
+		t.Fatal("timeline lacks clipped evidence or app search metadata")
+	}
+	if o.Calendar[12].EstimatedSeconds != 60 || o.Calendar[14].EstimatedSeconds != 0 {
+		t.Fatal("calendar navigation leaked time across days")
+	}
+}

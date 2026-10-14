@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Isolated binary, lifecycle, update and skill-install smoke; no real capture."""
+import os
 import argparse
 import json
 from pathlib import Path
@@ -15,6 +16,7 @@ args = parser.parse_args()
 if args.skip_native_check and args.live_agent:
     parser.error('--skip-native-check cannot be combined with --live-agent')
 repo = Path(__file__).resolve().parents[1]
+os.environ['DAYLOG_DEVELOPMENT_INSTALL'] = '1'
 root = Path(tempfile.mkdtemp(prefix='daylog-verify-', dir='/tmp'))
 data = root / 'data'
 proc = None

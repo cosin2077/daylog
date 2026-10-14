@@ -3,12 +3,18 @@ set -eu
 daylog_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$daylog_root"
 [ "$(uname -s)" = Darwin ] || { echo 'Native build requires macOS and Xcode Command Line Tools.' >&2; exit 1; }
-daylog_version=${DAYLOG_VERSION:-0.4.3}
+daylog_version=${DAYLOG_VERSION:-0.5.2}
 printf '%s\n' "$daylog_version" | /usr/bin/grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo 'DAYLOG_VERSION must be numeric major.minor.patch.' >&2; exit 1; }
 daylog_host=$(go env GOARCH)
 daylog_arches=$daylog_host
 if [ "${1:-}" = --all-arches ]; then daylog_arches='arm64 amd64'; fi
 case "${1:-}" in ''|--all-arches) ;; *) echo 'Usage: sh scripts/build.sh [--all-arches]' >&2; exit 1;; esac
+daylog_signing_flags=''
+if [ -z "${DAYLOG_SIGNING_IDENTITY:-}" ]; then
+  [ "${DAYLOG_DEVELOPMENT_BUILD:-}" = 1 ] && [ "${DAYLOG_REQUIRE_SIGNING:-}" != 1 ] || { echo 'Release requires fixed signing; use scripts/with-signing.py. For local development only set DAYLOG_DEVELOPMENT_BUILD=1.' >&2; exit 1; }
+  daylog_signing_flags='-X daylog/internal/update.developmentBuild=true'
+fi
+python3 scripts/verify-signing-config.py
 mkdir -p dist skills/daylog/assets
 # Only task-owned build outputs; never package leftovers from another version.
 rm -f skills/daylog/assets/daylog-macos-arm64.tar.gz skills/daylog/assets/daylog-macos-amd64.tar.gz skills/daylog/assets/release.json skills/daylog/assets/checksums.txt dist/daylog-skill-macos.tar.gz
@@ -17,7 +23,7 @@ for daylog_arch in $daylog_arches; do
   daylog_app="$daylog_root/dist/$daylog_arch/Daylog.app"
   rm -rf "$daylog_app"
   mkdir -p "$daylog_app/Contents/MacOS" "$daylog_app/Contents/Resources"
-  GOARCH="$daylog_arch" CGO_ENABLED=1 CGO_CFLAGS="-arch $daylog_ccarch" CGO_LDFLAGS="-arch $daylog_ccarch" go build -trimpath -ldflags "-s -w -X main.version=$daylog_version" -o "$daylog_app/Contents/MacOS/daylog" ./cmd/daylog
+  GOARCH="$daylog_arch" CGO_ENABLED=1 CGO_CFLAGS="-arch $daylog_ccarch" CGO_LDFLAGS="-arch $daylog_ccarch" go build -trimpath -ldflags "-s -w -X main.version=$daylog_version $daylog_signing_flags" -o "$daylog_app/Contents/MacOS/daylog" ./cmd/daylog
   cat > "$daylog_app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -36,7 +42,7 @@ for daylog_arch in $daylog_arches; do
 PLIST
   cp LICENSE "$daylog_app/Contents/Resources/LICENSE"
   cp assets/icon/Daylog.icns "$daylog_app/Contents/Resources/Daylog.icns"
-  /usr/bin/codesign --force --sign - "$daylog_app"
+  python3 scripts/sign-app.py "$daylog_app"
   /usr/bin/codesign --verify --deep --strict "$daylog_app"
   /usr/bin/plutil -lint "$daylog_app/Contents/Info.plist"
   COPYFILE_DISABLE=1 tar -czf "skills/daylog/assets/daylog-macos-$daylog_arch.tar.gz" -C "dist/$daylog_arch" Daylog.app
