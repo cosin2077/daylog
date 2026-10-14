@@ -20,7 +20,7 @@ import (
 	"daylog/internal/update"
 )
 
-var version = "0.6.0"
+var version = "0.6.1"
 
 const help = `Daylog — 自动记录今天做了什么
 
@@ -77,6 +77,9 @@ func main() {
 	}
 }
 func output(v any) error { return json.NewEncoder(os.Stdout).Encode(v) }
+func printHelp(text string) {
+	fmt.Print(strings.Replace(text, "Daylog —", "Daylog "+version+" —", 1))
+}
 func flags(name string) *flag.FlagSet {
 	f := flag.NewFlagSet(name, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
@@ -105,18 +108,18 @@ func execute(args []string) error {
 	args = filtered
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		if len(args) > 1 && args[1] == "--advanced" {
-			fmt.Print(advancedHelp)
+			printHelp(advancedHelp)
 		} else {
-			fmt.Print(help)
+			printHelp(help)
 		}
 		return nil
 	}
 	if args[0] == "config" && len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
-		fmt.Print(configHelp)
+		printHelp(configHelp)
 		return nil
 	}
 	if args[0] == "report" && len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
-		fmt.Print(reportHelp)
+		printHelp(reportHelp)
 		return nil
 	}
 	if args[0] == "version" || args[0] == "--version" {
