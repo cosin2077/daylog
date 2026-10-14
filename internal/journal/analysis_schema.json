@@ -2,8 +2,6 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema_version",
-    "batch_id",
     "segments"
   ],
   "properties": {
@@ -23,13 +21,7 @@
         "required": [
           "title",
           "summary",
-          "category",
-          "object",
-          "confidence",
-          "task_id",
-          "actions",
-          "evidence",
-          "uncertainties"
+          "evidence"
         ],
         "properties": {
           "title": {
@@ -66,7 +58,7 @@
             "items": {
               "type": "string"
             },
-            "maxItems": 12
+            "maxItems": 8
           },
           "evidence": {
             "type": "array",
@@ -81,7 +73,7 @@
             "items": {
               "type": "string"
             },
-            "maxItems": 12
+            "maxItems": 8
           }
         }
       }

@@ -619,6 +619,14 @@ func (s *Store) Cleanup(c Config, now time.Time) error {
 				}
 			}
 		}
+		logDir := filepath.Join(s.Root, "logs", "llm")
+		if _, err := os.Stat(logDir); err == nil {
+			if err = s.pruneAnalysisLogs(c, logDir, 0); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 		return nil
 	})
 }
@@ -636,11 +644,8 @@ func (s *Store) reserveAttempt(id string, c Config, now time.Time, withinFallbac
 		if _, err = os.Stat(s.reportPath(id)); err == nil {
 			return errors.New("batch already analyzed")
 		}
-		if b.Attempts >= 3 {
-			return errors.New("batch exhausted three API attempts; use agent analysis")
-		}
-		if !withinFallback && b.LastAttempt != nil && now.Sub(*b.LastAttempt) < 15*time.Minute {
-			return errors.New("batch retry is cooling down")
+		if !withinFallback && !RetryReady(b, now) {
+			return ErrRetryCooling
 		}
 		day := now.Local().Format("2006-01-02")
 		path := filepath.Join(s.Root, "usage", day+".json")
@@ -649,10 +654,10 @@ func (s *Store) reserveAttempt(id string, c Config, now time.Time, withinFallbac
 			return err
 		}
 		if usage.Requests >= c.AI.MaxRequestsPerDay {
-			return errors.New("daily API request budget reached")
+			return ErrDailyBudget
 		}
 		if usage.SubmittedImages+len(b.Frames) > c.MaxImagesPerDay {
-			return errors.New("daily image budget reached")
+			return ErrDailyBudget
 		}
 		if usage.KnownUsageCalls+usage.UnknownUsageCalls < usage.Requests {
 			usage.UnknownUsageCalls = usage.Requests - usage.KnownUsageCalls
@@ -667,6 +672,7 @@ func (s *Store) reserveAttempt(id string, c Config, now time.Time, withinFallbac
 		at := now.UTC()
 		b.LastAttempt = &at
 		b.LastError = ""
+		b.RetryAfter = nil
 		if err = WriteJSON(filepath.Join(s.Root, "batches", id+".json"), b); err != nil {
 			return err
 		}

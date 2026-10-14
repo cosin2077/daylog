@@ -82,8 +82,12 @@ func TestV2RejectsInventedEvidenceAndTaskLinks(t *testing.T) {
 	}
 	raw, _ := json.Marshal(v2Input(b))
 	raw = []byte(strings.Replace(string(raw), `"confidence":"medium"`, `"confidence":"medium","start":"invented"`, 1))
-	if err := s.CommitAnalysis(b.ID, raw, "api", ""); err == nil {
-		t.Fatal("model timestamp accepted")
+	if err := s.CommitAnalysis(b.ID, raw, "api", ""); err != nil {
+		t.Fatal(err)
+	}
+	var report Report
+	if err := ReadJSON(s.reportPath(b.ID), &report); err != nil || report.Cards[0].EstimatedSeconds != 270 || !report.Cards[0].Start.Equal(b.Start) {
+		t.Fatal("ignored model timestamp changed derived time")
 	}
 	if err := s.Commit(testReport(b), "api"); err == nil {
 		t.Fatal("legacy commit bypassed v2 derivation")

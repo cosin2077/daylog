@@ -37,6 +37,8 @@ For a conversational weekly/monthly summary, first read `daylog report --period 
 
 New screenshots live under `frames/YYYY-MM-DD/` using the capture machine's local date; legacy flat references remain readable. Always use `pending`'s resolved image paths, not a guessed flat path. `daylog prompt` prints the exact built-in screenshot-analysis instructions.
 
+For analysis failures, start with `status --json`, `pending --json` and the corresponding records in `logs/llm/`. Inspect error_kind, elapsed_ms and redacted stderr before changing model settings. Logs include private payload/response text; do not paste full records into chat. An explicitly requested `analyze --batch ID --retry` makes a batch immediately eligible without resetting its historical attempts or daily budget. Old exhausted batches recover automatically under the new backoff policy. Honor agent.order exactly; never prioritize Codex for speed over the user’s Claude preference. An opt-in AI fallback runs only after all configured agents fail, using ai.model then ai.fallback_models. Each failed chain counts once. More than five failed retries triggers one system notification submission per batch; status/report remain the reliable persisted indicators.
+
 ## Automatic analysis and efficiency
 
 Automatic API analysis is disabled by default. Enable it only for a user-selected endpoint and vision model; it is a separate data destination from this agent. Users can provide API keys with `--api-key` or `ai.api_key` in JSON. Keychain storage is optional. Do not include actual credentials in this skill or conversation summaries. See [commands.md](references/commands.md).

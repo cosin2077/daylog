@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -71,7 +72,62 @@ func loginAgentEnvironment(ctx context.Context, agent string, base []string) []s
 		indices[name] = len(env)
 		env = append(env, entry)
 	}
+	if agent == "codex" {
+		names := codexCredentialNames(env)
+		for _, entry := range strings.Split(string(out.Bytes()[index+len(marker):]), "\x00") {
+			name, value, ok := strings.Cut(entry, "=")
+			if !ok || value == "" || !names[name] {
+				continue
+			}
+			if i, exists := indices[name]; exists {
+				_, current, _ := strings.Cut(env[i], "=")
+				if current == "" {
+					env[i] = entry
+				}
+			} else {
+				indices[name] = len(env)
+				env = append(env, entry)
+			}
+		}
+	}
 	return env
+}
+
+var providerEnvKey = regexp.MustCompile(`^\s*env_key\s*=\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*(?:#.*)?$`)
+
+// Read only declared credential variable names; values remain in process memory.
+func codexCredentialNames(env []string) map[string]bool {
+	names := map[string]bool{}
+	home, _ := os.UserHomeDir()
+	root := filepath.Join(home, ".codex")
+	for _, pair := range env {
+		if value, ok := strings.CutPrefix(pair, "CODEX_HOME="); ok && value != "" {
+			root = value
+		}
+	}
+	f, err := os.Open(filepath.Join(root, "config.toml"))
+	if err != nil {
+		return names
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	if err != nil {
+		return names
+	}
+	provider := false
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			provider = strings.HasPrefix(line, "[model_providers.")
+		}
+		if !provider {
+			continue
+		}
+		if match := providerEnvKey.FindStringSubmatch(line); match != nil {
+			names[match[1]] = true
+		}
+	}
+	return names
 }
 
 func agentEnvironmentVariable(agent, name string) bool {

@@ -34,6 +34,7 @@ For manual range calculations, clip v2 spans (legacy card ranges) and merge over
 | `observations/YYYY-MM-DD.jsonl` | Local sample and state events; repeated sampled observations reuse frame_id. Retained with journal retention. Not a substitute for interpreted activities. |
 | `usage/YYYY-MM-DD.json` | Attempts, submitted_images (including retries), known API input/output tokens, known_usage_calls and unknown_usage_calls. Agent token counts are unknown, not zero. Not a complete provider bill. |
 | `config.json` | User settings; can contain plaintext API keys. Not needed to answer activity questions. Read only relevant, redacted fields for configuration tasks. |
+| `logs/llm/YYYY-MM-DD*.jsonl` | Private, bounded request/response diagnostics: payload, response, error_kind, timing, redacted stderr; no image Base64/auth headers. Default retention 7 days, cap 32 MiB. |
 | `daemon.log`, `run.sock`, lock files | Diagnostics / runtime coordination; not activity evidence. |
 
 If manually reading files, use RFC3339 timestamps to select intervals, including batches spanning midnight; do not assume the archive folder matches `frames`' local date. Never run text search over config or logs just to produce a work summary. Processed raw screenshots expire by file age (3 days by default, not 3 days after analysis); unselected/orphan frames can be removed earlier. Reports are retained for 90 days by default; pending/draft evidence is protected. A missing screenshot does not invalidate an existing summary, but prevents visual revalidation.
@@ -45,3 +46,5 @@ Lead with the main tasks, then give a short timeline and approximate recorded co
 Example wording, not real user data: “这段时间主要在修改报告界面，并查阅相关文档；已整理片段覆盖约 40 分钟，另有 2 批尚未分析，暂时无法完整估计总耗时。”
 
 Only give behavioral suggestions when asked, at most two, with supporting observations. Do not infer distraction, health, mood, or ability from app switches. A normal summary request is satisfied by existing JSON; do not resubmit the screenshot library or start recording. For requested new image analysis, use the skill's pending/commit flow and the current report schema.
+
+For v0.4.1, batches/reports record app_source=window_server. Older v2 records may have cached app IDs; the overview exposes legacy_app_metadata and warns about application/time reliability. Do not silently rewrite historical app labels. Retry metadata includes failure_rounds and retry_after; attempts is a lifetime count, not a permanent three-attempt gate.

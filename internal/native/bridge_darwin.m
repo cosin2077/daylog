@@ -11,7 +11,20 @@
 #import <pthread.h>
 
 static NSString *frontmost(void) {
-    return NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier ?: @"";
+    // NSWorkspace caches the active application in a CLI without an AppKit
+    // event loop. Query WindowServer each time instead; no AX permission,
+    // event tap, screenshot, or permanent helper process is required.
+    NSArray *windows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,kCGNullWindowID));
+    for(NSDictionary *window in windows) {
+        if([window[(__bridge NSString *)kCGWindowLayer] intValue]!=0) continue;
+        if([window[(__bridge NSString *)kCGWindowAlpha] doubleValue]<=0) continue;
+        CGRect bounds=CGRectZero;
+        if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)window[(__bridge NSString *)kCGWindowBounds],&bounds) || bounds.size.width<=1 || bounds.size.height<=1) continue;
+        pid_t pid=[window[(__bridge NSString *)kCGWindowOwnerPID] intValue];
+        NSString *bundle=[NSRunningApplication runningApplicationWithProcessIdentifier:pid].bundleIdentifier;
+        if(bundle.length) return bundle;
+    }
+    return @"";
 }
 
 char *dg_environment(void) {

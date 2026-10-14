@@ -55,12 +55,16 @@ func writeConfig(w io.Writer, root string, c journal.Config) {
 	mode := "仅记录，自动分析已关闭"
 	if c.AI.Enabled {
 		mode = "自定义 API · " + readable(c.AI.Model)
+		if c.AI.FallbackAfterAgents {
+			mode = "本机 Agent · " + strings.Join(c.Agent.Order, " → ") + " → API 回退"
+		}
 	} else if c.Agent.Enabled {
 		mode = "本机 Agent · " + strings.Join(c.Agent.Order, " → ")
 	}
 	fmt.Fprintln(w, "  分析方式  "+mode)
 	if c.AI.Enabled {
 		fmt.Fprintln(w, "  API 地址  "+readable(c.AI.Endpoint))
+		fmt.Fprintln(w, "  API 模型  "+readable(strings.Join(append([]string{c.AI.Model}, c.AI.FallbackModels...), " → ")))
 	}
 	key := "未在配置文件中设置；可使用环境变量或系统钥匙串"
 	if c.AI.APIKey != "" {
@@ -97,6 +101,8 @@ func writeConfig(w io.Writer, root string, c journal.Config) {
 		updateSource = readable(c.Update.Source)
 	}
 	fmt.Fprintln(w, "  更新来源  "+updateSource)
+	fmt.Fprintln(w, "  失败通知  "+enabled(c.Diagnostics.FailureNotifications)+" · 连续重试失败超过 5 次后通知一次")
+	fmt.Fprintf(w, "  分析日志  %s · 保留 %d 天 · 上限 %s\n", enabled(c.Diagnostics.Enabled), c.Diagnostics.RetentionDays, statusBytes(c.Diagnostics.MaxBytes))
 	fmt.Fprintln(w, "\n修改方法：daylog config -h；完整结构化配置：daylog config --json。")
 }
 
@@ -191,15 +197,31 @@ func writePending(w io.Writer, batches []journal.Batch, total int) {
 		fmt.Fprintf(w, "  %d 张关键帧 · 已尝试 %d 次\n  批次：%s\n", len(b.Frames), b.Attempts, b.ID)
 		if b.LastError != "" {
 			fmt.Fprintln(w, "  状态："+analysisReason(b.LastError))
+			fmt.Fprintf(w, "  失败轮次：%d · 手动重试：daylog analyze --batch %s --retry\n", b.FailureRounds, b.ID)
 		}
-		if b.Attempts >= 3 {
-			fmt.Fprintln(w, "  自动尝试次数已达上限，可让 Agent 协助整理这批截图。")
+		if next := journal.RetryTime(b); next.After(time.Now()) {
+			fmt.Fprintln(w, "  下次可重试："+next.Local().Format("15:04:05"))
 		}
 	}
 	fmt.Fprintln(w, "\n后台会在策略允许时整理；也可用 daylog analyze 手动处理一批。")
 }
 
 func analysisReason(reason string) string {
+	if strings.Contains(reason, "timeout") {
+		return "模型调用超时；错误详情已记录到 logs/llm，失败批次会退避重试"
+	}
+	if strings.Contains(reason, "cli_exit") {
+		return "Agent 命令未正常退出；可查看 logs/llm 中的脱敏 stderr"
+	}
+	if strings.Contains(reason, "validation_failed") || strings.Contains(reason, "invalid_json") {
+		return "模型结果未通过校验；响应和错误原因已记录到 logs/llm"
+	}
+	if strings.Contains(reason, "daily analysis budget") {
+		return "今日调用或图片预算已达上限，次日自动恢复"
+	}
+	if strings.Contains(reason, "cooling") {
+		return "正在等待重试间隔"
+	}
 	switch reason {
 	case "no_compatible_local_agent":
 		return "未找到可用的本机 Agent，可用 daylog agents 检查"

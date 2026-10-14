@@ -349,7 +349,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		if gap > r.Config.MaxGapSeconds {
 			gap = r.Config.MaxGapSeconds
 		}
-		r.draft = Batch{SchemaVersion: 2, ID: ID(now), Start: now.UTC(), MaxGapSeconds: gap, SupportGapSeconds: r.Config.MaxGapSeconds}
+		r.draft = Batch{AppSource: "window_server", SchemaVersion: 2, ID: ID(now), Start: now.UTC(), MaxGapSeconds: gap, SupportGapSeconds: r.Config.MaxGapSeconds}
 	}
 	frame.Change = Difference(fp, r.lastFingerprint)
 	frame.Reason = "change"
@@ -394,6 +394,22 @@ func (r *Runner) publish() {
 	if err == nil {
 		r.mu.Lock()
 		r.status.Pending = len(pending)
+		r.status.FailedBatches = 0
+		r.status.AttentionBatches = 0
+		r.status.NextRetry = nil
+		for _, b := range pending {
+			if b.LastError != "" {
+				r.status.FailedBatches++
+				if b.FailureRounds > 6 {
+					r.status.AttentionBatches++
+				}
+			}
+			next := RetryTime(b)
+			if b.LastError != "" && next.After(time.Now()) && (r.status.NextRetry == nil || next.Before(*r.status.NextRetry)) {
+				at := next
+				r.status.NextRetry = &at
+			}
+		}
 		r.mu.Unlock()
 	}
 	if time.Since(r.lastInventory) >= 10*time.Minute {
@@ -420,10 +436,16 @@ func (r *Runner) analysisLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 		if !r.Config.AI.Enabled && !r.Config.Agent.Enabled {
+			r.mu.Lock()
+			r.status.AnalysisState = "disabled"
+			r.mu.Unlock()
 			continue
 		}
 		env, err := r.Source.Environment(ctx)
 		if err != nil || !PowerPolicy(r.Config, env).CanAnalyze {
+			r.mu.Lock()
+			r.status.AnalysisState = "power_paused"
+			r.mu.Unlock()
 			continue
 		}
 		r.mu.Lock()
@@ -436,28 +458,41 @@ func (r *Runner) analysisLoop(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		for _, b := range pending {
-			if b.Attempts >= 3 || (b.LastAttempt != nil && time.Since(*b.LastAttempt) < 15*time.Minute) {
-				continue
-			}
-			workCtx, cancel := context.WithCancel(ctx)
+		b, ready := nextAnalysis(pending, time.Now())
+		if !ready {
 			r.mu.Lock()
-			r.analysisCancel = cancel
+			r.status.AnalysisState = "waiting"
 			r.mu.Unlock()
-			if r.Config.AI.Enabled {
-				key := ""
-				if r.Key != nil {
-					key = r.Key()
-				}
-				_ = r.Store.Analyze(workCtx, b.ID, r.Config, key, nil)
-			} else {
-				_ = r.Store.AnalyzeAgent(workCtx, b.ID, r.Config, "")
-			}
-			cancel()
-			r.mu.Lock()
-			r.analysisCancel = nil
-			r.mu.Unlock()
-			break
+			continue
 		}
+		workCtx, cancel := context.WithCancel(ctx)
+		r.mu.Lock()
+		r.analysisCancel = cancel
+		r.status.AnalysisState = "running"
+		r.status.AnalysisBatch = b.ID
+		r.status.AnalysisError = ""
+		r.mu.Unlock()
+		key := ""
+		if r.Config.AI.Enabled && r.Key != nil {
+			key = r.Key()
+		}
+		analysisErr := r.Store.AnalyzeConfigured(workCtx, b.ID, r.Config, key, "", nil)
+		cancel()
+		r.mu.Lock()
+		r.analysisCancel = nil
+		r.status.AnalysisBatch = ""
+		if analysisErr == nil {
+			at := time.Now().UTC()
+			r.status.LastAnalysis = &at
+			r.status.AnalysisState = "idle"
+		} else {
+			r.status.AnalysisState = "retry_wait"
+			r.status.AnalysisError = redact(analysisErr.Error(), nil)
+			if errors.Is(analysisErr, ErrDailyBudget) {
+				r.status.AnalysisState = "budget_exhausted"
+			}
+		}
+		r.mu.Unlock()
+
 	}
 }

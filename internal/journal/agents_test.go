@@ -125,7 +125,7 @@ func TestAgentTimeoutDoesNotRunPastBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := time.Now()
-	_, err := runAgent(context.Background(), "claude", script, dir, Batch{}, nil, 1, false)
+	_, err := runAgent(context.Background(), "claude", script, dir, Batch{}, nil, 1, false, "inherit")
 	if err == nil || time.Since(started) > 4*time.Second {
 		t.Fatal("agent process timeout did not terminate promptly")
 	}
@@ -140,5 +140,38 @@ func TestUnknownAgentIsDetectedWithoutInvocation(t *testing.T) {
 		if info.Name == "grok" && (!info.Installed || info.Supported || !strings.Contains(info.Reason, "no_verified")) {
 			t.Fatal("CLI advertised as a vision adapter")
 		}
+	}
+}
+
+func TestCodexImportsOnlyDeclaredProviderCredential(t *testing.T) {
+	root := t.TempDir()
+	shell := filepath.Join(root, "zsh")
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte("[model_providers.custom]\nenv_key = 'CUSTOM_PROVIDER_CREDENTIAL'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\nprintf '\\000DAYLOG_ENV_BEGIN\\000CUSTOM_PROVIDER_CREDENTIAL=fixture-auth-value\\000UNRELATED_SECRET=do-not-import\\000'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	env := loginAgentEnvironment(context.Background(), "codex", []string{"SHELL=" + shell, "CODEX_HOME=" + root})
+	combined := strings.Join(env, "\n")
+	if !strings.Contains(combined, "CUSTOM_PROVIDER_CREDENTIAL=fixture-auth-value") || strings.Contains(combined, "UNRELATED_SECRET") {
+		t.Fatal("provider credential missing or unrelated secret imported")
+	}
+	env = loginAgentEnvironment(context.Background(), "codex", []string{"SHELL=" + shell, "CODEX_HOME=" + root, "CUSTOM_PROVIDER_CREDENTIAL=explicit-value"})
+	if strings.Contains(strings.Join(env, "\n"), "fixture-auth-value") {
+		t.Fatal("profile overrode explicit credential")
+	}
+}
+
+func TestClaudeStructuredResultIsUsed(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "claude")
+	event := `{"type":"result","is_error":false,"result":"done","structured_output":{"schema_version":2,"batch_id":"fixture","segments":[]}}`
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n/bin/cat >/dev/null\nprintf '%s\\n' '"+event+"'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	trace, err := runAgent(context.Background(), "claude", script, dir, Batch{SchemaVersion: 2}, nil, 10, false, "low")
+	if err != nil || !strings.Contains(trace.Response, `"segments":[]`) {
+		t.Fatal("structured Claude response ignored")
 	}
 }

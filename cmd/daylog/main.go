@@ -20,7 +20,7 @@ import (
 	"daylog/internal/update"
 )
 
-var version = "0.4.0"
+var version = "0.4.2"
 
 const help = `Daylog — 自动记录今天做了什么
 
@@ -52,7 +52,7 @@ daylog [--data 私有目录] <命令>
   stop | pause [--minutes N] | resume
   pending [--limit N]        待分析批次与本地图片路径
   commit --file 文件或-      导入 Agent 生成的证据化记录
-  analyze [--batch ID] [--agent 名称] [--allow-battery]  分析一批
+  analyze [--batch ID] [--agent 名称] [--retry] [--allow-battery]  分析一批
   agents                     检测本机 Agent 及适配状态
   update [--source 地址或文件] [--check] [--remember]  自更新
   today [--date YYYY-MM-DD] [--json]      查看日记
@@ -274,7 +274,8 @@ func execute(args []string) error {
 		if *source == "" {
 			return errors.New("update source is not configured; use --source <release.json URL or file>")
 		}
-		_, check, err := update.Inspect(ctx, *source, version)
+		var check update.Check
+		err = withProgress(!*asJSON, "正在检查更新", func() error { var e error; _, check, e = update.Inspect(ctx, *source, version); return e })
 		if err != nil {
 			return err
 		}
@@ -306,26 +307,30 @@ func execute(args []string) error {
 		app := filepath.Dir(filepath.Dir(filepath.Dir(exe)))
 		wasRunning := false
 		wasService := service.IsLoaded(s.Root)
-		check, err = update.Install(ctx, *source, app, version, *force, func() error {
-			if _, probe := journal.SendControl(s.Root, journal.Control{Op: "status"}); probe != nil {
-				return nil
-			}
-			wasRunning = true
-			if _, stopErr := journal.SendControl(s.Root, journal.Control{Op: "stop"}); stopErr != nil {
-				return stopErr
-			}
-			deadline := time.Now().Add(15 * time.Second)
-			for time.Now().Before(deadline) {
+		err = withProgress(!*asJSON, "正在下载、校验并安装更新", func() error {
+			var installErr error
+			check, installErr = update.Install(ctx, *source, app, version, *force, func() error {
 				if _, probe := journal.SendControl(s.Root, journal.Control{Op: "status"}); probe != nil {
 					return nil
 				}
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(100 * time.Millisecond):
+				wasRunning = true
+				if _, stopErr := journal.SendControl(s.Root, journal.Control{Op: "stop"}); stopErr != nil {
+					return stopErr
 				}
-			}
-			return errors.New("recording did not stop in time; update refused")
+				deadline := time.Now().Add(15 * time.Second)
+				for time.Now().Before(deadline) {
+					if _, probe := journal.SendControl(s.Root, journal.Control{Op: "status"}); probe != nil {
+						return nil
+					}
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(100 * time.Millisecond):
+					}
+				}
+				return errors.New("recording did not stop in time; update refused")
+			})
+			return installErr
 		})
 		if err != nil {
 			return err
@@ -470,6 +475,7 @@ func execute(args []string) error {
 		id := f.String("batch", "", "batch ID")
 		agent := f.String("agent", "", "choose a local agent instead of configured API")
 		allowBattery := f.Bool("allow-battery", false, "explicit battery override")
+		retry := f.Bool("retry", false, "retry a failed batch now without resetting daily budgets")
 		if err = f.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -485,7 +491,7 @@ func execute(args []string) error {
 			return errors.New("analysis paused by power policy; --allow-battery explicitly overrides it")
 		}
 		if *id == "" {
-			pending, err := s.Pending(1)
+			pending, err := s.Pending(0)
 			if err != nil {
 				return err
 			}
@@ -493,14 +499,29 @@ func execute(args []string) error {
 				return result(*asJSON, map[string]string{"state": "no_pending_batches"}, "没有待整理的批次。")
 			}
 			*id = pending[0].ID
+			if *retry {
+				for _, b := range pending {
+					if b.LastError != "" {
+						*id = b.ID
+						break
+					}
+				}
+			}
 		}
-		if c.AI.Enabled && *agent == "" {
-			err = s.Analyze(ctx, *id, c, apiKey(c), nil)
-		} else {
-			err = s.AnalyzeAgent(ctx, *id, c, *agent)
+		if *retry {
+			if err = s.RequestRetry(*id); err != nil {
+				return err
+			}
 		}
+		err = withProgress(!*asJSON, "正在整理活动", func() error {
+			return s.AnalyzeConfigured(ctx, *id, c, apiKey(c), *agent, nil)
+		})
+
 		if err != nil {
-			return err
+			if *asJSON {
+				return err
+			}
+			return fmt.Errorf("%s\n截图仍保留。重试：daylog analyze --batch %s --retry", analysisReason(err.Error()), *id)
 		}
 		return result(*asJSON, map[string]string{"batch_id": *id, "state": "analyzed"}, "已完成一批活动整理。用 daylog today 或 daylog report 查看。")
 	case "today":

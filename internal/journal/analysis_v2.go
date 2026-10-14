@@ -33,24 +33,68 @@ type Segment struct {
 	Uncertainties []string `json:"uncertainties"`
 }
 
-func strictDecode(data []byte, v any) error {
+// Accept presentation differences; never invent missing screenshot evidence.
+func decodeInterpretation(b Batch, data []byte) (Interpretation, error) {
+	var in Interpretation
 	if len(data) > 1<<20 {
-		return errors.New("analysis exceeds size limit")
+		return in, errors.New("analysis exceeds size limit")
 	}
 	text := strings.TrimSpace(string(data))
-	if strings.HasPrefix(text, "```json\n") && strings.HasSuffix(text, "```") {
-		text = strings.TrimSuffix(strings.TrimPrefix(text, "```json\n"), "```")
+	if strings.HasPrefix(text, "```") {
+		line, body, ok := strings.Cut(text, "\n")
+		language := strings.TrimSpace(strings.TrimPrefix(line, "```"))
+		if ok && (language == "" || strings.EqualFold(language, "json")) && strings.HasSuffix(body, "```") {
+			text = strings.TrimSpace(strings.TrimSuffix(body, "```"))
+		}
 	}
 	d := json.NewDecoder(strings.NewReader(text))
-	d.DisallowUnknownFields()
-	if err := d.Decode(v); err != nil {
-		return err
+	// Unknown fields are ignored, including model-supplied times. Durations are
+	// always derived from local observations, never from these ignored fields.
+	if err := d.Decode(&in); err != nil {
+		return in, err
 	}
 	var extra any
 	if d.Decode(&extra) != io.EOF {
-		return errors.New("trailing analysis content")
+		return in, errors.New("trailing analysis content")
 	}
-	return nil
+	if in.SchemaVersion == 0 {
+		in.SchemaVersion = 2
+	}
+	if in.BatchID == "" {
+		in.BatchID = b.ID
+	}
+	if in.SchemaVersion != 2 || in.BatchID != b.ID || in.Segments == nil || len(in.Segments) > 12 {
+		return in, errors.New("invalid v2 batch or segment count")
+	}
+	for i := range in.Segments {
+		g := &in.Segments[i]
+		g.Title = strings.TrimSpace(g.Title)
+		g.Summary = strings.TrimSpace(g.Summary)
+		if g.Title == "" || g.Summary == "" {
+			return in, errors.New("segment title and summary required")
+		}
+		g.Category = category(g.Category)
+		g.Confidence = strings.ToLower(strings.TrimSpace(g.Confidence))
+		if g.Confidence == "" {
+			g.Confidence = "medium"
+		}
+		if g.Actions == nil {
+			g.Actions = []string{}
+		}
+		if g.Uncertainties == nil {
+			g.Uncertainties = []string{}
+		}
+		seen := map[string]bool{}
+		evidence := []string{}
+		for _, id := range g.Evidence {
+			if !seen[id] {
+				evidence = append(evidence, id)
+				seen[id] = true
+			}
+		}
+		g.Evidence = evidence
+	}
+	return in, nil
 }
 
 // Persist the exact bounded context given to the model, so commit validates the
@@ -116,22 +160,36 @@ func truncate(s string, n int) string {
 
 func inputMetadata(b Batch) []byte {
 	// Exclude paths, retry errors and local operational details from model input.
-	frames := append([]Frame(nil), b.Frames...)
-	for i := range frames {
-		frames[i].File = ""
+	type inputFrame struct {
+		ID  string     `json:"id"`
+		App string     `json:"app,omitempty"`
+		At  *time.Time `json:"at,omitempty"`
+	}
+	frames := make([]inputFrame, 0, len(b.Frames))
+	for _, f := range b.Frames {
+		app := f.App
+		if b.SchemaVersion == 2 && b.AppSource == "" && !strings.HasPrefix(app, "window:") {
+			app = ""
+		}
+		frame := inputFrame{ID: f.ID, App: app}
+		if b.SchemaVersion != 2 {
+			at := f.At
+			frame.At = &at
+		}
+		frames = append(frames, frame)
 	}
 	data, _ := json.Marshal(struct {
 		BatchID string        `json:"batch_id"`
 		Start   time.Time     `json:"start"`
 		End     time.Time     `json:"end"`
-		Frames  []Frame       `json:"frames"`
+		Frames  []inputFrame  `json:"frames"`
 		Context []TaskContext `json:"context,omitempty"`
 	}{b.ID, b.Start, b.End, frames, b.Context})
 	return data
 }
 
 func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
-	r := Report{SchemaVersion: 2, Revision: 1, PromptVersion: "activity-v2", Model: model, BatchID: b.ID, Start: b.Start, End: b.End, Cards: []Card{}}
+	r := Report{AppSource: b.AppSource, SchemaVersion: 2, Revision: 1, PromptVersion: "activity-v2.1", Model: model, BatchID: b.ID, Start: b.Start, End: b.End, Cards: []Card{}}
 	if b.SchemaVersion != 2 || in.SchemaVersion != 2 || in.BatchID != b.ID || in.Segments == nil || len(in.Segments) > 12 {
 		return r, errors.New("invalid v2 batch or segment count")
 	}
@@ -185,10 +243,13 @@ func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
 			if !f.At.Before(card.End) {
 				card.End = f.At.Add(time.Nanosecond)
 			}
-			if !apps[f.App] {
+			if !apps[f.App] && (b.AppSource != "" || strings.HasPrefix(f.App, "window:")) {
 				card.Apps = append(card.Apps, f.App)
 				apps[f.App] = true
 			}
+		}
+		if b.AppSource == "" {
+			card.Uncertainties = append(card.Uncertainties, "旧版前台应用标识可能未反映真实切换，时长仅供参考")
 		}
 		r.Cards = append(r.Cards, card)
 	}
@@ -235,7 +296,7 @@ func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
 		Observations  []Observation
 		MaxGap        int
 		Prompt, Model string
-	}{inputMetadata(b), b.Observations, b.MaxGapSeconds, "activity-v2", model})
+	}{inputMetadata(b), b.Observations, b.MaxGapSeconds, "activity-v2.1", model})
 	hash := sha256.Sum256(hashData)
 	r.InputHash = hex.EncodeToString(hash[:])
 	return r, nil
@@ -280,8 +341,8 @@ func (s *Store) CommitAnalysis(id string, data []byte, source, model string) err
 		}
 		return s.Commit(r, source)
 	}
-	var in Interpretation
-	if err = strictDecode(data, &in); err != nil {
+	in, err := decodeInterpretation(b, data)
+	if err != nil {
 		return err
 	}
 	return s.locked(func() error {

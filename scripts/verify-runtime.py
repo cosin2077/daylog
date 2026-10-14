@@ -55,7 +55,7 @@ try:
     result['llm_config_cli_roundtrip'] = True
     run([exe, '--data', fresh, 'config', '--profile', 'battery'])
     profile = json.loads(run([exe, '--data', fresh, 'config', '--json']))
-    assert profile['min_save_seconds'] == 120 and profile['max_images_per_day'] == 144
+    assert profile['min_save_seconds'] == 120 and profile['max_images_per_day'] == 768
     assert profile['ai']['model'] == 'fixture-vision' and not profile['ai']['enabled']
     result['profile_preserves_provider'] = True
     assert 'service install' not in cli('help') and 'service install' in cli('help', '--advanced')

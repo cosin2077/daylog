@@ -47,6 +47,25 @@ func configStore(t *testing.T) *journal.Store {
 	return s
 }
 
+func TestAgentOrderWithAPIFallbackConfiguration(t *testing.T) {
+	s := configStore(t)
+	args := []string{"--agent", "claude,hermes", "--api-fallback", "--endpoint", "https://api.example.com/v1/chat/completions", "--model", "primary", "--fallback-models", "second"}
+	if err := configure(s, args, strings.NewReader(""), io.Discard, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	c, err := journal.ReadConfig(s.Root)
+	if err != nil || strings.Join(c.Agent.Order, ",") != "claude,hermes" || !c.AI.Enabled || !c.AI.FallbackAfterAgents || len(c.AI.FallbackModels) != 1 {
+		t.Fatal("fallback config lost priority")
+	}
+	if err = configure(s, []string{"--agent", "claude,hermes"}, strings.NewReader(""), io.Discard, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	c, _ = journal.ReadConfig(s.Root)
+	if c.AI.Enabled {
+		t.Fatal("agent-only mode still sends to API")
+	}
+}
+
 func TestLLMConfigPreservesPreferencesAndKeepsKeyOutOfFiles(t *testing.T) {
 	s := configStore(t)
 	c := journal.DefaultConfig()
@@ -103,5 +122,16 @@ func TestInvalidLLMConfigDoesNotWriteConfigurationOrCredential(t *testing.T) {
 		if err := configure(s, []string{"--api-key-stdin"}, strings.NewReader(key), io.Discard, func(string) error { t.Fatal("invalid credential was saved"); return nil }); err == nil {
 			t.Fatal("invalid credential accepted")
 		}
+	}
+}
+
+func TestFailureNotificationsTogglePreservesAnalysis(t *testing.T) {
+	s := configStore(t)
+	if err := configure(s, []string{"--notifications=false"}, strings.NewReader(""), io.Discard, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	c, err := journal.ReadConfig(s.Root)
+	if err != nil || c.Diagnostics.FailureNotifications || !c.Agent.Enabled || !c.Diagnostics.Enabled {
+		t.Fatal("notification toggle changed analysis or diagnostics")
 	}
 }

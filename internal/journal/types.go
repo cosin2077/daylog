@@ -33,6 +33,10 @@ type TaskContext struct {
 }
 
 type Batch struct {
+	AppSource         string        `json:"app_source,omitempty"`
+	RetryAfter        *time.Time    `json:"retry_after,omitempty"`
+	FailureNotified   bool          `json:"failure_notified,omitempty"`
+	FailureRounds     int           `json:"failure_rounds,omitempty"`
 	SupportGapSeconds int           `json:"support_gap_seconds,omitempty"`
 	SchemaVersion     int           `json:"schema_version,omitempty"`
 	Observations      []Observation `json:"observations,omitempty"`
@@ -69,6 +73,7 @@ type Card struct {
 }
 
 type Report struct {
+	AppSource      string     `json:"app_source,omitempty"`
 	SchemaVersion  int        `json:"schema_version,omitempty"`
 	Revision       int        `json:"revision,omitempty"`
 	PromptVersion  string     `json:"prompt_version,omitempty"`
@@ -85,19 +90,28 @@ type Report struct {
 }
 
 type Status struct {
-	PID              int        `json:"pid"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	StartedAt        time.Time  `json:"started_at"`
-	LastCapture      *time.Time `json:"last_capture,omitempty"`
-	LastSaved        *time.Time `json:"last_saved,omitempty"`
-	Captures         int64      `json:"captures"`
-	Saved            int64      `json:"saved_frames"`
-	SkippedIdle      int64      `json:"skipped_idle"`
-	SkippedBlocked   int64      `json:"skipped_blocked"`
-	SkippedUnchanged int64      `json:"skipped_unchanged"`
-	Paused           bool       `json:"paused"`
-	PauseUntil       *time.Time `json:"pause_until,omitempty"`
-	Pending          int        `json:"pending_batches"`
-	StorageBytes     int64      `json:"storage_bytes"`
-	Error            string     `json:"error,omitempty"`
+	ReportGeneratedAt    *time.Time `json:"report_generated_at,omitempty"`
+	ReportHasNewAnalysis bool       `json:"report_has_new_analysis"`
+	AnalysisState        string     `json:"analysis_state,omitempty"`
+	AnalysisError        string     `json:"analysis_error,omitempty"`
+	AnalysisBatch        string     `json:"analysis_batch,omitempty"`
+	LastAnalysis         *time.Time `json:"last_analysis,omitempty"`
+	AttentionBatches     int        `json:"attention_batches"`
+	FailedBatches        int        `json:"failed_batches"`
+	NextRetry            *time.Time `json:"next_retry,omitempty"`
+	PID                  int        `json:"pid"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+	StartedAt            time.Time  `json:"started_at"`
+	LastCapture          *time.Time `json:"last_capture,omitempty"`
+	LastSaved            *time.Time `json:"last_saved,omitempty"`
+	Captures             int64      `json:"captures"`
+	Saved                int64      `json:"saved_frames"`
+	SkippedIdle          int64      `json:"skipped_idle"`
+	SkippedBlocked       int64      `json:"skipped_blocked"`
+	SkippedUnchanged     int64      `json:"skipped_unchanged"`
+	Paused               bool       `json:"paused"`
+	PauseUntil           *time.Time `json:"pause_until,omitempty"`
+	Pending              int        `json:"pending_batches"`
+	StorageBytes         int64      `json:"storage_bytes"`
+	Error                string     `json:"error,omitempty"`
 }

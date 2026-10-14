@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"daylog/internal/journal"
@@ -25,6 +26,22 @@ func statusCommand(s *journal.Store, args []string) error {
 			return err
 		}
 		return errors.New("未连接到后台；尚未启动时运行 daylog start，若已启动可用 daylog doctor 检查")
+	}
+	// Restore recent success information even immediately after a daemon restart.
+	now := time.Now()
+	reports, reportErr := s.Reports(now.Add(-48*time.Hour), now.Add(time.Minute))
+	if reportErr == nil {
+		for _, r := range reports {
+			if status.LastAnalysis == nil || r.CreatedAt.After(*status.LastAnalysis) {
+				at := r.CreatedAt
+				status.LastAnalysis = &at
+			}
+		}
+	}
+	if info, e := os.Stat(filepath.Join(s.Root, "reports", "report.html")); e == nil {
+		at := info.ModTime()
+		status.ReportGeneratedAt = &at
+		status.ReportHasNewAnalysis = status.LastAnalysis != nil && status.LastAnalysis.After(at)
 	}
 	if *asJSON {
 		return output(status)
@@ -63,6 +80,33 @@ func writeStatus(w io.Writer, s journal.Status, now time.Time) {
 		fmt.Fprintln(w, "  待整理    无待处理批次")
 	} else {
 		fmt.Fprintf(w, "  待整理    %d 批\n", s.Pending)
+	}
+	if s.AnalysisState != "" {
+		state := map[string]string{"running": "正在整理", "idle": "等待新批次", "waiting": "等待新批次或重试时间", "retry_wait": "分析失败，等待重试", "power_paused": "按电源/屏幕策略暂缓", "budget_exhausted": "今日预算已达上限，次日自动恢复", "disabled": "自动分析已关闭"}[s.AnalysisState]
+		if state == "" {
+			state = "等待调度"
+		}
+		fmt.Fprintln(w, "  分析状态  "+state)
+	}
+	if s.FailedBatches > 0 {
+		fmt.Fprintf(w, "  分析失败  %d 批，保留证据并自动退避重试\n", s.FailedBatches)
+		fmt.Fprintln(w, "  手动重试  daylog analyze --retry（或 pending 查看批次）")
+	}
+	if s.AttentionBatches > 0 {
+		fmt.Fprintf(w, "  需要关注  %d 批已连续重试失败超过 5 次；请查看 logs/llm 或 report\n", s.AttentionBatches)
+	}
+	if s.AnalysisError != "" {
+		fmt.Fprintln(w, "  分析提示  "+analysisReason(s.AnalysisError))
+	}
+	if s.NextRetry != nil {
+		fmt.Fprintln(w, "  下次重试  "+s.NextRetry.Local().Format("15:04:05"))
+	}
+	fmt.Fprintln(w, "  最近整理  "+statusTime(s.LastAnalysis, now))
+	if s.ReportGeneratedAt != nil {
+		fmt.Fprintln(w, "  报告快照  "+statusTime(s.ReportGeneratedAt, now))
+		if s.ReportHasNewAnalysis {
+			fmt.Fprintln(w, "            已有新分析结果，运行 daylog report 刷新")
+		}
 	}
 	fmt.Fprintf(w, "  截图占用  %s（磁盘）\n", statusBytes(s.StorageBytes))
 	fmt.Fprintf(w, "  状态更新  %s\n", statusTime(&s.UpdatedAt, now))

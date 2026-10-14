@@ -28,8 +28,9 @@ type Activity struct {
 }
 
 type CategorySummary struct {
-	Name  string `json:"name"`
-	Count int    `json:"count"`
+	EstimatedSeconds int64  `json:"estimated_seconds"`
+	Name             string `json:"name"`
+	Count            int    `json:"count"`
 }
 
 type DaySummary struct {
@@ -45,7 +46,25 @@ type TaskSummary struct {
 	EstimatedSeconds int64  `json:"estimated_seconds"`
 }
 
+type AnalysisFailure struct {
+	BatchID        string    `json:"batch_id"`
+	Reason         string    `json:"reason"`
+	FailureRounds  int       `json:"failure_rounds"`
+	RetryAfter     time.Time `json:"retry_after"`
+	NeedsAttention bool      `json:"needs_attention"`
+}
+type TimeBucket struct {
+	Start            time.Time         `json:"start"`
+	End              time.Time         `json:"end"`
+	EstimatedSeconds int64             `json:"estimated_seconds"`
+	Categories       []CategorySummary `json:"categories"`
+}
+
 type PeriodReport struct {
+	Failures     []AnalysisFailure `json:"failures"`
+	Distribution []TimeBucket      `json:"distribution"`
+
+	LegacyAppMetadata     bool              `json:"legacy_app_metadata"`
 	InterpolatedSeconds   int64             `json:"interpolated_seconds"`
 	EstimatedSeconds      int64             `json:"estimated_seconds"`
 	UnknownSeconds        int64             `json:"unknown_seconds"`
@@ -177,9 +196,13 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 	evidence := map[string]bool{}
 	batches := map[string]bool{}
 	var spans, estimated, legacy, unknown, interpolated []span
+	categorySpans := map[string][]span{}
 	taskSpans := map[string][]span{}
 	taskTitles := map[string]string{}
 	for _, r := range reports {
+		if r.SchemaVersion == 2 && r.AppSource == "" && r.Start.Before(end) && r.End.After(start) {
+			p.LegacyAppMetadata = true
+		}
 		if r.SchemaVersion == 2 && r.Start.Before(end) && r.End.After(start) {
 			batches[r.BatchID] = true
 		}
@@ -225,6 +248,7 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 					}
 					a.EstimatedSeconds = covered(append([]span(nil), parts...))
 					estimated = append(estimated, parts...)
+					categorySpans[a.Category] = append(categorySpans[a.Category], parts...)
 					taskSpans[c.TaskID] = append(taskSpans[c.TaskID], parts...)
 					taskTitles[c.TaskID] = c.Title
 				} else {
@@ -248,6 +272,7 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 			p.PendingBatches++
 			if b.LastError != "" {
 				p.FailedBatches++
+				p.Failures = append(p.Failures, AnalysisFailure{b.ID, FailureReason(b.LastError), b.FailureRounds, RetryTime(b).In(start.Location()), b.FailureRounds > 6})
 			}
 			for day := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location()); day.Before(end); day = day.AddDate(0, 0, 1) {
 				if b.Start.Before(day.AddDate(0, 0, 1)) && b.End.After(day) {
@@ -287,7 +312,33 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 		p.Days = append(p.Days, DaySummary{Date: key, Activities: dayCount[key], CoverageSeconds: seconds, PendingBatches: dayPending[key]})
 	}
 	for _, name := range []string{"工作", "学习", "沟通", "其他"} {
-		p.Categories = append(p.Categories, CategorySummary{Name: name, Count: counts[name]})
+		p.Categories = append(p.Categories, CategorySummary{Name: name, Count: counts[name], EstimatedSeconds: covered(append([]span(nil), categorySpans[name]...))})
+	}
+	// Bucket only actual observation spans. Never spread card bounding time
+	// across gaps; hourly/day boundaries use the report's calendar timezone.
+	for at := start; at.Before(end); {
+		until := at.AddDate(0, 0, 1)
+		if kind == "day" {
+			until = at.Add(time.Hour)
+		}
+		if until.After(end) {
+			until = end
+		}
+		bucket := TimeBucket{Start: at, End: until, Categories: []CategorySummary{}}
+		var all []span
+		for _, name := range []string{"工作", "学习", "沟通", "其他"} {
+			var parts []span
+			for _, part := range categorySpans[name] {
+				if clipped, ok := clipSpan(TimeSpan{Start: part.start, End: part.end}, at, until); ok {
+					parts = append(parts, clipped)
+					all = append(all, clipped)
+				}
+			}
+			bucket.Categories = append(bucket.Categories, CategorySummary{Name: name, EstimatedSeconds: covered(parts)})
+		}
+		bucket.EstimatedSeconds = covered(all)
+		p.Distribution = append(p.Distribution, bucket)
+		at = until
 	}
 	if len(p.Activities) == 0 {
 		p.Summary = "这个时间范围还没有已整理的活动。"

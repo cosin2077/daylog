@@ -74,44 +74,80 @@ const reportSchema = `{"type":"object","additionalProperties":false,"required":[
 
 type cappedBuffer struct {
 	bytes.Buffer
-	max int
+	max      int
+	overflow bool
 }
 
 func (b *cappedBuffer) Write(p []byte) (int, error) {
 	if b.Len()+len(p) > b.max {
+		b.overflow = true
 		return 0, errors.New("CLI output limit exceeded")
 	}
 	return b.Buffer.Write(p)
 }
 
+type AgentTrace struct {
+	Response, Stderr, Kind string
+	ExitCode               *int
+	secrets                []string
+}
+type tailBuffer struct {
+	data []byte
+	max  int
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	b.data = append(b.data, p...)
+	if len(b.data) > b.max {
+		b.data = append([]byte(nil), b.data[len(b.data)-b.max:]...)
+	}
+	return n, nil
+}
+func (b *tailBuffer) String() string { return string(b.data) }
+
+func parseAnalysis(b Batch, data []byte) (any, error) {
+	if b.SchemaVersion == 2 {
+		return decodeInterpretation(b, data)
+	}
+	return parseAgentReport(data)
+}
+
 // Images and prompts are private temporary inputs. Agent arguments never go
 // through a shell; process groups bound timeout/stop to all descendants.
-func runAgent(ctx context.Context, name, path, dir string, b Batch, images []string, timeout int, inheritLoginEnv bool) ([]byte, error) {
+func runAgent(ctx context.Context, name, path, dir string, b Batch, images []string, timeout int, inheritLoginEnv bool, effort string) (trace AgentTrace, err error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
+	trace.Kind = "setup_error"
 	meta := inputMetadata(b)
-	prompt := instructionsForBatch(b) + "\n不要调用任何工具，仅根据附图返回 JSON。\n" + string(meta)
+	prompt := instructionsForBatch(b) + "\n" + string(meta)
 	var args []string
 	var input []byte
 	switch name {
 	case "codex":
 		schema := filepath.Join(dir, "schema.json")
-		if err := os.WriteFile(schema, []byte(schemaForBatch(b)), 0600); err != nil {
-			return nil, err
+		if err := os.WriteFile(schema, []byte(codexSchemaForBatch(b)), 0600); err != nil {
+			return trace, err
 		}
-		args = []string{"exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--disable", "shell_tool", "--disable", "unified_exec", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use", "--disable", "multi_agent", "--disable", "code_mode_host", "--config", "mcp_servers={}", "--output-schema", schema, "--output-last-message", filepath.Join(dir, "result.json"), "--color", "never"}
+		args = []string{"exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--disable", "shell_tool", "--disable", "unified_exec", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use", "--disable", "multi_agent", "--disable", "code_mode_host", "--disable", "hooks", "--disable", "plugins", "--disable", "memories", "--disable", "skill_search", "--disable", "code_mode", "--config", "mcp_servers={}", "--output-schema", schema, "--output-last-message", filepath.Join(dir, "result.json"), "--color", "never"}
+		if effort != "" && effort != "inherit" {
+			args = append(args, "--config", `model_reasoning_effort="`+effort+`"`)
+		}
 		for _, image := range images {
 			args = append(args, "--image", image)
 		}
 		args = append(args, "-")
 		input = []byte(prompt)
 	case "claude":
-		args = []string{"--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--tools", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--disable-slash-commands", "--no-session-persistence", "--settings", `{"disableAllHooks":true}`}
+		args = []string{"--print", "--safe-mode", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--tools", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--disable-slash-commands", "--no-session-persistence", "--settings", `{"disableAllHooks":true}`, "--max-turns", "1", "--system-prompt", "你是屏幕活动证据整理器。只根据附带截图和元数据返回指定结构的 JSON，不调用工具。"}
+		if effort != "" && effort != "inherit" {
+			args = append(args, "--effort", effort)
+		}
 		parts := []map[string]any{{"type": "text", "text": prompt}}
 		for _, path := range images {
 			data, err := os.ReadFile(path)
 			if err != nil {
-				return nil, err
+				return trace, err
 			}
 			parts = append(parts, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/jpeg", "data": base64.StdEncoding.EncodeToString(data)}})
 		}
@@ -121,13 +157,16 @@ func runAgent(ctx context.Context, name, path, dir string, b Batch, images []str
 	case "hermes":
 		collage := filepath.Join(dir, "collage.jpg")
 		if err := contactSheet(images, collage); err != nil {
-			return nil, err
+			return trace, err
 		}
 		prompt += "\n附图按行排列，每行最多两张：第 i 张对应 frames[i]。拼图只用于本批次视觉输入。"
 		args = []string{"chat", "--query-file", "-", "--oneshot", "--quiet", "--format", "stream-json", "--image", collage, "--toolsets", "none", "--max-turns", "1", "--run-budget", fmt.Sprint(timeout), "--ignore-rules", "--source", "tool"}
+		if effort != "" && effort != "inherit" {
+			args = append(args, "--reasoning", effort)
+		}
 		input = []byte(prompt)
 	default:
-		return nil, errors.New("agent has no verified image adapter")
+		return trace, errors.New("agent has no verified image adapter")
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = dir
@@ -135,6 +174,16 @@ func runAgent(ctx context.Context, name, path, dir string, b Batch, images []str
 	env := os.Environ()
 	if inheritLoginEnv {
 		env = loginAgentEnvironment(ctx, name, env)
+	}
+	trace.secrets = environmentSecrets(env)
+	if name == "codex" {
+		credentialNames := codexCredentialNames(env)
+		for _, pair := range env {
+			k, v, ok := strings.Cut(pair, "=")
+			if ok && credentialNames[k] {
+				trace.secrets = append(trace.secrets, v)
+			}
+		}
 	}
 	cmd.Env = append(env, "PATH="+os.Getenv("PATH")+":"+filepath.Join(home, ".local", "bin")+":"+filepath.Join(home, ".bun", "bin")+":/opt/homebrew/bin:/usr/local/bin")
 	cmd.Stdin = bytes.NewReader(input)
@@ -148,62 +197,87 @@ func runAgent(ctx context.Context, name, path, dir string, b Batch, images []str
 	cmd.WaitDelay = 2 * time.Second
 	stdout := &cappedBuffer{max: 2 << 20}
 	cmd.Stdout = stdout
-	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
-		return nil, errors.New("agent invocation failed or timed out")
+	stderr := &tailBuffer{max: 16 << 10}
+	cmd.Stderr = stderr
+	callErr := cmd.Run()
+	trace.Stderr = stderr.String()
+	trace.Response = string(stdout.Bytes())
+	if callErr != nil {
+		trace.Kind = "cli_exit"
+		var exit *exec.ExitError
+		if errors.As(callErr, &exit) {
+			code := exit.ExitCode()
+			trace.ExitCode = &code
+		}
+		if ctx.Err() == context.DeadlineExceeded {
+			trace.Kind = "timeout"
+		} else if ctx.Err() != nil {
+			trace.Kind = "canceled"
+		} else if stdout.overflow {
+			trace.Kind = "output_limit"
+		}
+		return trace, fmt.Errorf("%s: %s", name, trace.Kind)
 	}
+	code := 0
+	trace.ExitCode = &code
+	trace.Kind = "missing_result"
+
 	if name == "codex" {
 		data, err := os.ReadFile(filepath.Join(dir, "result.json"))
 		if err != nil || len(data) > 1<<20 {
-			return nil, errors.New("agent result unavailable")
+			return trace, errors.New("agent result unavailable")
 		}
-		return data, nil
+		trace.Response = string(data)
+		trace.Kind = ""
+		return trace, nil
 	}
 	scanner := bufio.NewScanner(bytes.NewReader(stdout.Bytes()))
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	for scanner.Scan() {
 		var event struct {
-			Type     string `json:"type"`
-			Result   string `json:"result"`
-			Text     string `json:"text"`
-			IsError  bool   `json:"is_error"`
-			ExitCode int    `json:"exit_code"`
+			Structured json.RawMessage `json:"structured_output"`
+			Type       string          `json:"type"`
+			Result     string          `json:"result"`
+			Text       string          `json:"text"`
+			IsError    bool            `json:"is_error"`
+			ExitCode   int             `json:"exit_code"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &event) != nil {
 			continue
 		}
 		if event.Type == "result" {
 			if event.IsError || event.ExitCode != 0 {
-				return nil, errors.New("agent reported failure")
+				trace.Kind = "agent_error"
+				return trace, errors.New("agent reported failure")
 			}
 			if name == "claude" {
-				return []byte(event.Result), nil
+				if len(event.Structured) > 0 && string(event.Structured) != "null" {
+					trace.Response = string(event.Structured)
+					trace.Kind = ""
+					return trace, nil
+				}
+				trace.Response = event.Result
+				trace.Kind = ""
+				return trace, nil
 			}
-			return []byte(event.Text), nil
+			trace.Response = event.Text
+			trace.Kind = ""
+			return trace, nil
 		}
 	}
-	return nil, errors.New("agent returned no complete result")
+	return trace, errors.New("agent returned no complete result")
 }
 
-func (s *Store) AnalyzeAgent(ctx context.Context, id string, c Config, selected string) error {
+func (s *Store) analyzeAgent(ctx context.Context, id string, c Config, selected string) error {
 	if !c.Agent.Enabled && selected == "" {
 		return errors.New("automatic agent analysis disabled")
 	}
-	lock, err := os.OpenFile(filepath.Join(s.Root, "analysis.lock"), os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return errors.New("another analysis is running")
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	b, err := s.PrepareAnalysis(id)
 	if err != nil {
 		return err
 	}
-	if b.Attempts >= 3 || b.LastAttempt != nil && time.Since(*b.LastAttempt) < 15*time.Minute {
-		return errors.New("batch attempts exhausted or cooling down")
+	if !RetryReady(b, time.Now()) {
+		return ErrRetryCooling
 	}
 	parent := filepath.Join(s.Root, "jobs")
 	if err = os.MkdirAll(parent, 0700); err != nil {
@@ -247,31 +321,59 @@ func (s *Store) AnalyzeAgent(ctx context.Context, id string, c Config, selected 
 		infos[info.Name] = info
 	}
 	attempted := false
+	lastReason := "no_compatible_local_agent"
 	for _, name := range order {
 		info := infos[name]
 		if !info.Installed || !info.Supported {
 			continue
 		}
-		if _, err = s.reserveAttempt(id, c, time.Now(), attempted); err != nil {
-			return err
+		reserved, reserveErr := s.reserveAttempt(id, c, time.Now(), attempted)
+		if reserveErr != nil {
+			return reserveErr
 		}
 		attempted = true
-		data, callErr := runAgent(ctx, name, info.Path, dir, b, images, c.Agent.TimeoutSeconds, c.Agent.InheritLoginEnv)
+		started := time.Now()
+		requestID := ID(started)
+		event := AnalysisLog{Event: "request", RequestID: requestID, BatchID: id, Source: "agent:" + name, Attempt: reserved.Attempts, Payload: map[string]any{"input": logPayload(b), "effort": c.Agent.Effort, "timeout_seconds": c.Agent.TimeoutSeconds}}
+		secrets := environmentSecrets(os.Environ())
+		s.LogAnalysis(c, event, secrets)
+		trace, callErr := runAgent(ctx, name, info.Path, dir, b, images, c.Agent.TimeoutSeconds, c.Agent.InheritLoginEnv, c.Agent.Effort)
+		event.Event = "response"
+		event.Payload = nil
+		event.ElapsedMS = time.Since(started).Milliseconds()
+		event.Response = trace.Response
+		event.Stderr = trace.Stderr
+		event.ExitCode = trace.ExitCode
+		event.ErrorKind = trace.Kind
 		if callErr == nil {
-			if err = s.CommitAnalysis(id, data, "agent:"+name, ""); err == nil {
-				return nil
+			if _, parseErr := parseAnalysis(b, []byte(trace.Response)); parseErr != nil {
+				callErr = parseErr
+				event.ErrorKind = "invalid_json"
+			} else if err = s.CommitAnalysis(id, []byte(trace.Response), "agent:"+name, ""); err != nil {
+				callErr = err
+				event.ErrorKind = "validation_failed"
 			}
 		}
-		_ = s.Failed(id, "agent_failed:"+name)
+		if callErr != nil {
+			event.Error = callErr.Error()
+		}
+		s.LogAnalysis(c, event, append(secrets, trace.secrets...))
+		if callErr == nil {
+			return nil
+		}
+		lastReason = name + ":" + event.ErrorKind
+		_ = s.Failed(id, lastReason)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+
 	}
 	if !attempted {
-		_ = s.Failed(id, "no_compatible_local_agent")
+		_ = s.Failed(id, lastReason)
 		return errors.New("no compatible local image agent found")
 	}
-	return errors.New("local agents failed; batch remains pending")
+	return fmt.Errorf("%s; batch queued for retry", lastReason)
+
 }
 
 func parseAgentReport(data []byte) (Report, error) {

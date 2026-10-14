@@ -12,31 +12,40 @@ import (
 )
 
 type Config struct {
-	IntervalSeconds     int          `json:"interval_seconds"`
-	Height              int          `json:"height"`
-	Quality             int          `json:"jpeg_quality"`
-	WindowID            uint32       `json:"window_id"`
-	IdleSeconds         int          `json:"idle_after_seconds"`
-	MinSaveSeconds      int          `json:"min_save_seconds"`
-	HeartbeatSeconds    int          `json:"heartbeat_seconds"`
-	ChangeThreshold     float64      `json:"change_threshold"`
-	BatchSeconds        int          `json:"batch_seconds"`
-	TargetImages        int          `json:"target_images_per_batch"`
-	MaxGapSeconds       int          `json:"max_observation_gap_seconds"`
-	MaxImagesPerDay     int          `json:"max_images_per_day"`
-	MaxImages           int          `json:"max_images_per_batch"`
-	RawRetentionDays    int          `json:"raw_retention_days"`
-	ReportRetentionDays int          `json:"report_retention_days"`
-	MaxStorageBytes     int64        `json:"max_storage_bytes"`
-	MaxPendingBatches   int          `json:"max_pending_batches"`
-	BlockedApps         []string     `json:"blocked_apps"`
-	Power               PowerConfig  `json:"power"`
-	Agent               AgentConfig  `json:"agent"`
-	Update              UpdateConfig `json:"update"`
-	AI                  AIConfig     `json:"ai"`
+	IntervalSeconds     int               `json:"interval_seconds"`
+	Height              int               `json:"height"`
+	Quality             int               `json:"jpeg_quality"`
+	WindowID            uint32            `json:"window_id"`
+	IdleSeconds         int               `json:"idle_after_seconds"`
+	MinSaveSeconds      int               `json:"min_save_seconds"`
+	HeartbeatSeconds    int               `json:"heartbeat_seconds"`
+	ChangeThreshold     float64           `json:"change_threshold"`
+	BatchSeconds        int               `json:"batch_seconds"`
+	TargetImages        int               `json:"target_images_per_batch"`
+	MaxGapSeconds       int               `json:"max_observation_gap_seconds"`
+	MaxImagesPerDay     int               `json:"max_images_per_day"`
+	MaxImages           int               `json:"max_images_per_batch"`
+	RawRetentionDays    int               `json:"raw_retention_days"`
+	ReportRetentionDays int               `json:"report_retention_days"`
+	MaxStorageBytes     int64             `json:"max_storage_bytes"`
+	MaxPendingBatches   int               `json:"max_pending_batches"`
+	BlockedApps         []string          `json:"blocked_apps"`
+	Power               PowerConfig       `json:"power"`
+	Agent               AgentConfig       `json:"agent"`
+	Update              UpdateConfig      `json:"update"`
+	Diagnostics         DiagnosticsConfig `json:"diagnostics"`
+	AI                  AIConfig          `json:"ai"`
+}
+
+type DiagnosticsConfig struct {
+	FailureNotifications bool  `json:"failure_notifications"`
+	Enabled              bool  `json:"enabled"`
+	RetentionDays        int   `json:"retention_days"`
+	MaxBytes             int64 `json:"max_bytes"`
 }
 
 type AgentConfig struct {
+	Effort          string   `json:"effort"`
 	Enabled         bool     `json:"enabled"`
 	Order           []string `json:"order"`
 	TimeoutSeconds  int      `json:"timeout_seconds"`
@@ -54,22 +63,25 @@ type PowerConfig struct {
 }
 
 type AIConfig struct {
-	Enabled           bool   `json:"enabled"`
-	Endpoint          string `json:"endpoint"`
-	Model             string `json:"model"`
-	APIKey            string `json:"api_key,omitempty"`
-	KeyEnv            string `json:"key_env"`
-	MaxRequestsPerDay int    `json:"max_requests_per_day"`
+	FallbackAfterAgents bool     `json:"fallback_after_agents"`
+	FallbackModels      []string `json:"fallback_models,omitempty"`
+	Enabled             bool     `json:"enabled"`
+	Endpoint            string   `json:"endpoint"`
+	Model               string   `json:"model"`
+	APIKey              string   `json:"api_key,omitempty"`
+	KeyEnv              string   `json:"key_env"`
+	MaxRequestsPerDay   int      `json:"max_requests_per_day"`
 }
 
 func DefaultConfig() Config {
 	return Config{IntervalSeconds: 30, Height: 720, Quality: 60, IdleSeconds: 300,
 		MinSaveSeconds: 90, HeartbeatSeconds: 300, ChangeThreshold: 0.005,
-		BatchSeconds: 900, TargetImages: 4, MaxImages: 8, MaxGapSeconds: 300, MaxImagesPerDay: 256, RawRetentionDays: 3, ReportRetentionDays: 90, MaxStorageBytes: 256 << 20,
+		BatchSeconds: 900, TargetImages: 4, MaxImages: 8, MaxGapSeconds: 300, MaxImagesPerDay: 1536, RawRetentionDays: 3, ReportRetentionDays: 90, MaxStorageBytes: 256 << 20,
 		MaxPendingBatches: 96, BlockedApps: []string{},
-		Power: PowerConfig{BatteryIntervalSeconds: 120, LowPowerIntervalSeconds: 180, PauseBelowPercent: 20},
-		Agent: AgentConfig{Enabled: true, Order: []string{"claude", "codex", "hermes"}, TimeoutSeconds: 90, InheritLoginEnv: true},
-		AI:    AIConfig{KeyEnv: "DAYLOG_API_KEY", MaxRequestsPerDay: 48}}
+		Power:       PowerConfig{BatteryIntervalSeconds: 120, LowPowerIntervalSeconds: 180, PauseBelowPercent: 20},
+		Agent:       AgentConfig{Effort: "low", Enabled: true, Order: []string{"claude", "codex", "hermes"}, TimeoutSeconds: 180, InheritLoginEnv: true},
+		Diagnostics: DiagnosticsConfig{FailureNotifications: true, Enabled: true, RetentionDays: 7, MaxBytes: 32 << 20},
+		AI:          AIConfig{KeyEnv: "DAYLOG_API_KEY", MaxRequestsPerDay: 192}}
 }
 
 func DefaultRoot() (string, error) {
@@ -96,13 +108,19 @@ func (c Config) Validate() error {
 	if c.TargetImages < 1 || c.TargetImages > 12 || c.MaxGapSeconds < 30 || c.MaxGapSeconds > 600 || c.MaxImagesPerDay < 1 || c.MaxImagesPerDay > 3072 {
 		return errors.New("target images must be 1..12, observation gap 30..600 seconds, daily images 1..3072")
 	}
-	if c.AI.MaxRequestsPerDay < 1 || c.AI.MaxRequestsPerDay > 256 {
-		return errors.New("AI daily request budget must be 1..256")
+	if c.AI.MaxRequestsPerDay < 1 || c.AI.MaxRequestsPerDay > 1024 {
+		return errors.New("AI daily request budget must be 1..1024")
+	}
+	if c.Diagnostics.RetentionDays < 1 || c.Diagnostics.RetentionDays > 30 || c.Diagnostics.MaxBytes < 1<<20 || c.Diagnostics.MaxBytes > 256<<20 {
+		return errors.New("diagnostic retention must be 1..30 days and size 1..256 MiB")
 	}
 	if c.ReportRetentionDays < 7 || c.ReportRetentionDays > 3650 {
 		return errors.New("report retention must be 7..3650 days")
 	}
-	if c.Agent.TimeoutSeconds < 10 || c.Agent.TimeoutSeconds > 180 || len(c.Agent.Order) > 5 {
+	if c.Agent.Effort != "" && c.Agent.Effort != "inherit" && c.Agent.Effort != "low" && c.Agent.Effort != "medium" && c.Agent.Effort != "high" {
+		return errors.New("agent effort must be inherit, low, medium or high")
+	}
+	if c.Agent.TimeoutSeconds < 10 || c.Agent.TimeoutSeconds > 600 || len(c.Agent.Order) > 5 {
 		return errors.New("invalid agent timeout or order")
 	}
 	for _, name := range c.Agent.Order {
@@ -112,6 +130,14 @@ func (c Config) Validate() error {
 	}
 	if c.Power.BatteryIntervalSeconds < c.IntervalSeconds || c.Power.LowPowerIntervalSeconds < c.Power.BatteryIntervalSeconds || c.Power.LowPowerIntervalSeconds > 1800 || c.Power.PauseBelowPercent < 5 || c.Power.PauseBelowPercent > 50 {
 		return errors.New("invalid power policy")
+	}
+	if len(c.AI.FallbackModels) > 4 {
+		return errors.New("at most four fallback API models allowed")
+	}
+	for _, model := range c.AI.FallbackModels {
+		if strings.TrimSpace(model) == "" {
+			return errors.New("fallback model cannot be empty")
+		}
 	}
 	if c.AI.Enabled {
 		if strings.TrimSpace(c.AI.Model) == "" {
@@ -173,8 +199,8 @@ func (c *Config) ApplyProfile(name string) error {
 		c.BatchSeconds = 900
 		c.TargetImages = 4
 		c.MaxImages = 8
-		c.MaxImagesPerDay = 256
-		c.AI.MaxRequestsPerDay = 48
+		c.MaxImagesPerDay = 1536
+		c.AI.MaxRequestsPerDay = 192
 		c.Power.BatteryIntervalSeconds = 120
 		c.Power.LowPowerIntervalSeconds = 180
 	case "battery":
@@ -183,8 +209,8 @@ func (c *Config) ApplyProfile(name string) error {
 		c.BatchSeconds = 1800
 		c.TargetImages = 3
 		c.MaxImages = 6
-		c.MaxImagesPerDay = 144
-		c.AI.MaxRequestsPerDay = 32
+		c.MaxImagesPerDay = 768
+		c.AI.MaxRequestsPerDay = 96
 		c.Power.BatteryIntervalSeconds = 180
 		c.Power.LowPowerIntervalSeconds = 300
 	case "detailed":
@@ -193,8 +219,8 @@ func (c *Config) ApplyProfile(name string) error {
 		c.BatchSeconds = 600
 		c.TargetImages = 6
 		c.MaxImages = 12
-		c.MaxImagesPerDay = 384
-		c.AI.MaxRequestsPerDay = 64
+		c.MaxImagesPerDay = 2304
+		c.AI.MaxRequestsPerDay = 288
 		c.Power.BatteryIntervalSeconds = 120
 		c.Power.LowPowerIntervalSeconds = 180
 	default:

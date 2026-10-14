@@ -11,8 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
-	"syscall"
+	"sort"
 	"time"
 )
 
@@ -39,25 +38,44 @@ func schemaForBatch(b Batch) string {
 	return reportSchema
 }
 
+// Codex strict schema providers require all declared properties to appear in
+// required. Keep that transport constraint out of the permissive input parser.
+func codexSchemaForBatch(b Batch) string {
+	var schema map[string]any
+	if json.Unmarshal([]byte(schemaForBatch(b)), &schema) != nil {
+		return schemaForBatch(b)
+	}
+	var visit func(map[string]any)
+	visit = func(node map[string]any) {
+		if props, ok := node["properties"].(map[string]any); ok {
+			keys := []string{}
+			for key, value := range props {
+				keys = append(keys, key)
+				if child, ok := value.(map[string]any); ok {
+					visit(child)
+				}
+			}
+			sort.Strings(keys)
+			node["required"] = keys
+		}
+		if item, ok := node["items"].(map[string]any); ok {
+			visit(item)
+		}
+	}
+	visit(schema)
+	data, _ := json.Marshal(schema)
+	return string(data)
+}
+
 func AnalysisPrompt() string { return analysisInstructions }
 
-func (s *Store) Analyze(ctx context.Context, id string, c Config, key string, client *http.Client) error {
+func (s *Store) analyzeAPI(ctx context.Context, id string, c Config, key string, client *http.Client, withinFallback bool) (err error) {
 	if !c.AI.Enabled {
 		return errors.New("API analysis is disabled; use the agent skill or configure ai.enabled")
 	}
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	// Serialize model calls even if a CLI invocation races the daemon.
-	lock, err := os.OpenFile(filepath.Join(s.Root, "analysis.lock"), os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return errors.New("another analysis is running")
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	b, err := s.PrepareAnalysis(id)
 	if err != nil {
 		return err
@@ -109,24 +127,51 @@ func (s *Store) Analyze(ctx context.Context, id string, c Config, key string, cl
 	safeClient := *client
 	safeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return errors.New("AI redirects are not allowed") }
 	attemptTime := time.Now()
-	if _, err = s.ReserveAttempt(id, c, attemptTime); err != nil {
+	reserved, err := s.reserveAttempt(id, c, attemptTime, withinFallback)
+	if err != nil {
 		return err
 	}
+	secrets := append(environmentSecrets(os.Environ()), key)
+	event := AnalysisLog{Event: "request", RequestID: ID(attemptTime), BatchID: id, Source: "api", Model: c.AI.Model, Attempt: reserved.Attempts, Payload: map[string]any{"endpoint": c.AI.Endpoint, "model": c.AI.Model, "max_tokens": 1800, "input": logPayload(b)}}
+	s.LogAnalysis(c, event, secrets)
+	defer func() {
+		event.Event = "response"
+		event.Payload = nil
+		event.ElapsedMS = time.Since(attemptTime).Milliseconds()
+		if err != nil {
+			if event.Error == "" {
+				event.Error = err.Error()
+			}
+			if event.ErrorKind == "" {
+				event.ErrorKind = "request_failed"
+			}
+			_ = s.Failed(id, event.ErrorKind)
+		}
+		s.LogAnalysis(c, event, secrets)
+	}()
+
 	response, err := safeClient.Do(httpRequest)
 	if err != nil {
-		s.Failed(id, "network_or_timeout")
+		event.ErrorKind = "network_or_timeout"
+		event.Error = err.Error()
+		if ctx.Err() == context.DeadlineExceeded {
+			event.ErrorKind = "timeout"
+		}
 		return errors.New("AI request failed or timed out")
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		s.Failed(id, "http_error")
-		return fmt.Errorf("AI HTTP status %d", response.StatusCode)
-	}
+	event.HTTPStatus = response.StatusCode
 	body, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
+	event.Response = string(body)
 	if err != nil || len(body) > 1<<20 {
-		s.Failed(id, "response_size")
+		event.ErrorKind = "response_size"
 		return errors.New("AI response is unreadable or too large")
 	}
+	if response.StatusCode != http.StatusOK {
+		event.ErrorKind = "http_error"
+		return fmt.Errorf("AI HTTP status %d", response.StatusCode)
+	}
+
 	var envelope struct {
 		Usage   *TokenUsage `json:"usage"`
 		Choices []struct {
@@ -137,7 +182,7 @@ func (s *Store) Analyze(ctx context.Context, id string, c Config, key string, cl
 		} `json:"choices"`
 	}
 	if err = json.Unmarshal(body, &envelope); err != nil || len(envelope.Choices) != 1 {
-		s.Failed(id, "response_shape")
+		event.ErrorKind = "response_shape"
 		return errors.New("AI response has an unsupported shape")
 	}
 	if envelope.Usage != nil {
@@ -146,11 +191,11 @@ func (s *Store) Analyze(ctx context.Context, id string, c Config, key string, cl
 		}
 	}
 	if envelope.Choices[0].FinishReason != "stop" {
-		s.Failed(id, "incomplete_response")
+		event.ErrorKind = "incomplete_response"
 		return errors.New("AI response did not finish; partial output was rejected")
 	}
 	if err = s.CommitAnalysis(id, []byte(envelope.Choices[0].Message.Content), "api", c.AI.Model); err != nil {
-		s.Failed(id, "invalid_report")
+		event.ErrorKind = "invalid_report"
 		return errors.New("AI report failed schema or evidence validation")
 	}
 	return nil

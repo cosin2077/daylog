@@ -17,6 +17,8 @@ const configHelp = `Daylog — 配置
 
 默认自动使用本机 Agent，不需要额外配置。
 
+  daylog config --notifications=false
+      关闭系统失败通知；status、报告和日志仍显示失败信息
   daylog config --profile balanced|battery|detailed
       选择均衡、省电或精细档；不改变模型和隐私设置
   daylog config
@@ -32,7 +34,9 @@ const configHelp = `Daylog — 配置
   daylog config --key-env MY_API_KEY
       改用指定环境变量中的密钥
   daylog config --agent auto
-      切回本机 Agent；也可指定 claude、codex 或 hermes
+      切回本机 Agent；可用 --agent claude,hermes 指定优先顺序
+  daylog config --api-fallback --fallback-models MODEL2
+      本机 Agent 全部失败后才使用已配置 API，主模型失败再试备用模型
 
 也可直接编辑 ~/.daylog/config.json，或用 --file FILE 导入完整配置。
 JSON 支持 ai.api_key 明文密钥；环境变量和钥匙串也可选。
@@ -43,6 +47,7 @@ JSON 支持 ai.api_key 明文密钥；环境变量和钥匙串也可选。
 
 func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Writer, setSecret func(string) error) error {
 	f := flags("config")
+	notifications := f.Bool("notifications", true, "enable system notifications for persistent analysis failures")
 	profile := f.String("profile", "", "balanced, battery or detailed")
 	file := f.String("file", "", "complete JSON config file or stdin")
 	endpoint := f.String("endpoint", "", "full Chat Completions endpoint")
@@ -50,7 +55,9 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 	plainKey := f.String("api-key", "", "plain API key saved in config.json")
 	keyEnv := f.String("key-env", "", "API key environment variable name")
 	keyStdin := f.Bool("api-key-stdin", false, "read API key from stdin into Keychain")
-	agent := f.String("agent", "", "auto, claude, codex or hermes")
+	agent := f.String("agent", "", "auto or comma-separated agent order")
+	apiFallback := f.Bool("api-fallback", false, "try configured API after local agents fail")
+	fallbackModels := f.String("fallback-models", "", "comma-separated fallback API models")
 	asJSON := f.Bool("json", false, "JSON output after editing")
 	if err := f.Parse(args); err != nil {
 		return err
@@ -61,7 +68,7 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 	changed := map[string]bool{}
 	f.Visit(func(v *flag.Flag) { changed[v.Name] = true })
 	customAPI := changed["endpoint"] || changed["model"]
-	if changed["agent"] && (customAPI || *keyStdin || changed["key-env"] || changed["api-key"]) {
+	if changed["agent"] && !*apiFallback && (customAPI || *keyStdin || changed["key-env"] || changed["api-key"]) {
 		return errors.New("请分别配置自定义 API 或选择本机 Agent，不要同时指定两者")
 	}
 	if *file == "-" && *keyStdin {
@@ -97,6 +104,9 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 			return err
 		}
 	}
+	if changed["notifications"] {
+		c.Diagnostics.FailureNotifications = *notifications
+	}
 	if changed["profile"] {
 		if err := c.ApplyProfile(*profile); err != nil {
 			return err
@@ -119,16 +129,35 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 		c.AI.Enabled = true
 	}
 	if changed["agent"] {
-		switch *agent {
-		case "auto":
+		if *agent == "auto" {
 			c.Agent.Order = journal.DefaultConfig().Agent.Order
-		case "claude", "codex", "hermes":
-			c.Agent.Order = []string{*agent}
-		default:
-			return errors.New("agent 只能是 auto、claude、codex 或 hermes")
+		} else {
+			c.Agent.Order = nil
+			for _, name := range strings.Split(*agent, ",") {
+				name = strings.TrimSpace(name)
+				if name != "claude" && name != "codex" && name != "hermes" {
+					return errors.New("agent 只能为 auto 或 claude,codex,hermes 的顺序列表")
+				}
+				c.Agent.Order = append(c.Agent.Order, name)
+			}
 		}
 		c.Agent.Enabled = true
 		c.AI.Enabled = false
+	}
+	if changed["api-fallback"] {
+		c.AI.FallbackAfterAgents = *apiFallback
+		if *apiFallback {
+			c.AI.Enabled = true
+			c.Agent.Enabled = true
+		}
+	}
+	if changed["fallback-models"] {
+		c.AI.FallbackModels = nil
+		if strings.TrimSpace(*fallbackModels) != "" {
+			for _, model := range strings.Split(*fallbackModels, ",") {
+				c.AI.FallbackModels = append(c.AI.FallbackModels, strings.TrimSpace(model))
+			}
+		}
 	}
 	if err := c.Validate(); err != nil {
 		return err
@@ -148,7 +177,7 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 		c.AI.APIKey = ""
 		c.AI.KeyEnv = ""
 	}
-	edited := changed["profile"] || *file != "" || customAPI || changed["key-env"] || changed["agent"] || changed["api-key"] || *keyStdin
+	edited := changed["notifications"] || changed["api-fallback"] || changed["fallback-models"] || changed["profile"] || *file != "" || customAPI || changed["key-env"] || changed["agent"] || changed["api-key"] || *keyStdin
 	if edited {
 		if err := journal.WriteJSON(filepath.Join(s.Root, "config.json"), c); err != nil {
 			return err
