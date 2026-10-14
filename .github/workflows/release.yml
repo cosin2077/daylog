@@ -9,6 +9,11 @@ on:
         description: Existing version tag, such as v0.4.0
         required: true
         type: string
+      verify_only:
+        description: Test the selected ref with signing secrets without creating a release (tag supplies only the version)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -32,7 +37,7 @@ jobs:
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected vMAJOR.MINOR.PATCH'; exit 1; }
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          ref: ${{ inputs.verify_only && github.sha || format('refs/tags/{0}', inputs.tag || github.ref_name) }}
           persist-credentials: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -56,6 +61,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Create draft release
+        if: ${{ !inputs.verify_only }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

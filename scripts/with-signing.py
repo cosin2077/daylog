@@ -69,7 +69,9 @@ with tempfile.TemporaryDirectory(prefix='daylog-signing-') as directory:
   if exported.returncode and not any(t in exported.stderr.lower() for t in (b'could not be found',b'no trust settings',b'not found')):
    raise SystemExit('Cannot inspect prior signing trust; refusing to alter it')
   if exported.returncode==0:
-   had_trust=identity in {str(k).upper() for k in plistlib.loads(trust_file.read_bytes()).get('trustList',{})}
+   trust_data=subprocess.run(trust_prefix+['/bin/cat',str(trust_file)],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+   if trust_data.returncode:raise SystemExit('Cannot read exported signing trust; refusing to alter it')
+   had_trust=identity in {str(k).upper() for k in plistlib.loads(trust_data.stdout).get('trustList',{})}
   run(['/usr/bin/security','list-keychains','-d','user','-s',str(keychain),*search_paths()],'Add temporary keychain search entry')
   search_added=True
   if not had_trust:

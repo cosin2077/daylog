@@ -15,7 +15,7 @@ Daylog 的正式构建使用长期自签名代码签名证书，并固定 Bundle
 
 ```sh
 python3 scripts/with-signing.py --identity-dir <private-directory> -- sh scripts/build.sh --all-arches
-python3 scripts/package-release.py --version 0.5.2
+python3 scripts/package-release.py --version 0.5.3
 ```
 
 包装器创建临时钥匙串。Apple 签名工具需要构建机认可签名身份，因此仅在构建期间添加该证书的 codeSign 用途信任，并加入临时钥匙串搜索项；结束时移除本任务添加的信任和搜索项，删除临时钥匙串。已有同证书信任不覆盖、不删除。CI 在一次性 macOS runner 中使用受限 codeSign 信任；用户运行 App 时不需要这些设置。
@@ -35,3 +35,5 @@ python3 scripts/package-release.py --version 0.5.2
 5. 完成云端构建后再次校验固定证书，从公开更新源验证本机升级。
 
 更新清单仍依赖 HTTPS/GitHub 分发。固定证书保证更新 App 的发布身份，并非 Apple 的开发者背书。证书轮换需要显式迁移设计，不能直接覆盖公共证书和 Secrets 后假装老客户端能自动接受。
+
+首次接入 Secrets 或修改签名脚本时，可手动运行 Release workflow 并开启 `verify_only`：构建当前所选 ref，tag 输入只指定数字版本，不创建 Release。预检通过后再给该提交打正式标签，避免反复创建失败的版本标签。
