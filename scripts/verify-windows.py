@@ -108,10 +108,25 @@ try:
     # a locked/service session is expected to skip native screenshots.
     launched=json.loads(cli('start','--json'));pid=launched['status']['pid']
     same=json.loads(cli('start','--json'));assert same['status']['pid']==pid
-    check=json.loads(cli('update','--force','--json'));assert check['restarted']
+    # Upgrade to a genuinely different binary/version, without --force.
+    candidate=root/'next-version';candidate.mkdir()
+    run(['go','build','-ldflags','-X main.version=9.0.0 -X daylog/internal/update.developmentBuild=true','-o',candidate/'daylog.exe','./cmd/daylog'])
+    new_digest=hashlib.sha256((candidate/'daylog.exe').read_bytes()).hexdigest()
+    assert new_digest!=hashlib.sha256(exe.read_bytes()).hexdigest()
+    next_zip=candidate/'next.zip'
+    with zipfile.ZipFile(next_zip,'w',compression=zipfile.ZIP_DEFLATED) as package:
+        package.write(candidate/'daylog.exe','daylog.exe')
+        package.writestr('signature.json',json.dumps({'version':'9.0.0','platform':'windows-amd64','sha256':new_digest,'signature':'development'}))
+        package.write(repo/'LICENSE','LICENSE')
+        package.write(repo/'docs/third-party-notices.txt','THIRD_PARTY_NOTICES.txt')
+    next_feed=candidate/'release.json'
+    next_feed.write_text(json.dumps({'version':'9.0.0','artifacts':{'windows-amd64':{'url':'next.zip','sha256':hashlib.sha256(next_zip.read_bytes()).hexdigest()}}}))
+    check=json.loads(cli('update','--source',next_feed,'--json'));assert check['restarted']
     next_status=wait_status(lambda s:s['pid']!=pid and s.get('updated_at'))
+    assert json.loads(cli('version','--json'))['version']=='9.0.0'
+    assert hashlib.sha256(exe.read_bytes()).hexdigest()==new_digest and config.read_bytes()==config_before
     cli('stop')
-    result['background_start_and_update_restart']=True
+    result['background_start_and_different_version_update_restart']=True
     result['native_capture_state']=next_status.get('error','available_but_not_user_desktop_validated')
 finally:
     if exe.exists():
