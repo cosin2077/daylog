@@ -18,7 +18,7 @@ python3 scripts/with-signing.py --identity-dir <private-directory> -- sh scripts
 python3 scripts/package-release.py --version 0.5.3
 ```
 
-包装器创建临时钥匙串。Apple 签名工具需要构建机认可签名身份，因此仅在构建期间添加该证书的 codeSign 用途信任，并加入临时钥匙串搜索项；结束时移除本任务添加的信任和搜索项，删除临时钥匙串。已有同证书信任不覆盖、不删除。CI 在一次性 macOS runner 中使用受限 codeSign 信任；用户运行 App 时不需要这些设置。
+包装器创建临时钥匙串。Apple 签名工具需要构建机认可签名身份，因此仅在构建期间添加该证书的 codeSign 用途信任，并加入临时钥匙串搜索项；结束时移除本任务添加的信任和搜索项，删除临时钥匙串。已有同证书信任不覆盖、不删除。CI 在一次性 macOS runner 中使用受限 codeSign 信任，公开证书放入临时使用的系统证书存储，私钥始终留在 runner 用户的临时钥匙串；结束后删除本任务添加的公开证书；用户运行 App 时不需要这些设置。
 
 不把 P12/密码传给实际编译子进程。失败和中断走清理路径；若清理失败会报告，不假装成功。强制杀死构建进程或断电仍应检查构建机是否有遗留临时钥匙串；CI runner 销毁后不持久保留。
 

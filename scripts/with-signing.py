@@ -35,7 +35,9 @@ def interrupted(signum, _frame):
  raise SystemExit(128+signum)
 for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):signal.signal(sig,interrupted)
 def run(args,description):
- p=subprocess.run(args,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+ print(description,flush=True)
+ try:p=subprocess.run(args,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=90 if os.environ.get('GITHUB_ACTIONS')=='true' else 300)
+ except subprocess.TimeoutExpired:raise SystemExit(description+' timed out (private arguments suppressed)') from None
  if p.returncode:
   detail=p.stderr.decode(errors='replace')
   for secret in (globals().get('pw',''),globals().get('password',''),os.environ.get('DAYLOG_SIGNING_P12_BASE64','')):
@@ -54,6 +56,7 @@ with tempfile.TemporaryDirectory(prefix='daylog-signing-') as directory:
  run(['/usr/bin/security','create-keychain','-p',pw,str(keychain)],'Create temporary keychain')
  trust_added=False
  search_added=False
+ ci_certificate_added=False
  trust_domain=['-d'] if os.environ.get('GITHUB_ACTIONS')=='true' else []
  trust_prefix=['/usr/bin/sudo','-n'] if trust_domain else []
  def search_paths():
@@ -75,7 +78,13 @@ with tempfile.TemporaryDirectory(prefix='daylog-signing-') as directory:
   run(['/usr/bin/security','list-keychains','-d','user','-s',str(keychain),*search_paths()],'Add temporary keychain search entry')
   search_added=True
   if not had_trust:
-   run(trust_prefix+['/usr/bin/security','add-trusted-cert',*trust_domain,'-r','trustRoot','-p','codeSign','-k',str(keychain),str(repo/'internal/update/signing-certificate.der')],'Temporarily trust build signing certificate for code signing')
+   # In CI, privileged trust settings use the system PUBLIC certificate store;
+   # the signing private key remains in the runner user's temporary keychain.
+   trust_keychain='/Library/Keychains/System.keychain' if trust_domain else str(keychain)
+   if trust_domain:
+    present=subprocess.run(trust_prefix+['/usr/bin/security','find-certificate','-a','-Z','-c','Daylog Release Signing',trust_keychain],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
+    ci_certificate_added=identity.encode() not in present.stdout.upper()
+   run(trust_prefix+['/usr/bin/security','add-trusted-cert',*trust_domain,'-r','trustRoot','-p','codeSign','-k',trust_keychain,str(repo/'internal/update/signing-certificate.der')],'Temporarily trust build signing certificate for code signing')
    trust_added=True
   run(['/usr/bin/security','unlock-keychain','-p',pw,str(keychain)],'Unlock temporary keychain after authorization')
   run(['/usr/bin/security','import',str(package),'-k',str(keychain),'-P',password,'-T','/usr/bin/codesign'],'Import signing identity')
@@ -88,10 +97,14 @@ with tempfile.TemporaryDirectory(prefix='daylog-signing-') as directory:
  finally:
   cleanup_errors=[]
   def cleanup(args,description):
-   p=subprocess.run(args,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-   if p.returncode:cleanup_errors.append(description)
+   try:
+    p=subprocess.run(args,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
+    if p.returncode:cleanup_errors.append(description)
+   except subprocess.TimeoutExpired:cleanup_errors.append(description)
   if trust_added:
    cleanup(trust_prefix+['/usr/bin/security','remove-trusted-cert',*trust_domain,str(repo/'internal/update/signing-certificate.der')],'temporary signing trust')
+  if ci_certificate_added:
+   cleanup(trust_prefix+['/usr/bin/security','delete-certificate','-Z',identity,'/Library/Keychains/System.keychain'],'temporary CI public signing certificate')
   if search_added:
    try:
     keep=[p for p in search_paths() if os.path.realpath(p)!=os.path.realpath(keychain)]
