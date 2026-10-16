@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func TestAnalysisLogRedactsAndKeepsValidJSON(t *testing.T) {
 		t.Fatal("log is not valid JSONL")
 	}
 	info, _ := os.Stat(files[0])
-	if info.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatal("log is not private")
 	}
 }
@@ -114,6 +115,9 @@ func TestAnalysisLogRotationAndLimits(t *testing.T) {
 }
 
 func TestAgentExitDiagnosticsSurviveCleanup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture; Windows process and adapter tests cover this platform")
+	}
 	s := testStore(t)
 	b := testBatch(t, s, time.Now())
 	dir := t.TempDir()

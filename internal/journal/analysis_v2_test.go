@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -297,6 +298,9 @@ func TestProfilesPreserveProviderAndPrivacy(t *testing.T) {
 }
 
 func TestV2AgentProtocolCommitsDerivedResult(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture; Windows process and adapter tests cover this platform")
+	}
 	s := testStore(t)
 	b := v2Batch(t, s, time.Now())
 	raw, _ := json.Marshal(v2Input(b))

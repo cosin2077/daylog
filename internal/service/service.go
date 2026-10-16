@@ -1,8 +1,9 @@
+//go:build !windows
+
 package service
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/xml"
 	"fmt"
 	"os"
@@ -14,10 +15,6 @@ func StartsAtLogin(home, root string) bool {
 	return err == nil && bytes.Contains(data, []byte("<key>RunAtLoad</key><true/>"))
 }
 
-func Label(root string) string {
-	hash := sha256.Sum256([]byte(root))
-	return fmt.Sprintf("io.daylog.agent.%x", hash[:4])
-}
 func Path(home, root string) string {
 	return filepath.Join(home, "Library", "LaunchAgents", Label(root)+".plist")
 }
@@ -31,7 +28,7 @@ type stringWriter []byte
 
 func (w *stringWriter) Write(p []byte) (int, error) { *w = append(*w, p...); return len(p), nil }
 
-func Plist(executable, root string, login bool) []byte {
+func Preview(executable, root string, login bool) []byte {
 	flag := "false"
 	if login {
 		flag = "true"
@@ -58,8 +55,16 @@ func Install(home, root, executable string, login bool) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, Plist(executable, root, login), 0600); err != nil {
+	if err := os.WriteFile(path, Preview(executable, root, login), 0600); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+func Uninstall(home, root string) error {
+	err := os.Remove(Path(home, root))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }

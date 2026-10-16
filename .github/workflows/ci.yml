@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-          cache: false # standard library only; no go.sum
+          cache: true
       - run: go test -race ./...
       - run: go vet ./...
       - run: DAYLOG_DEVELOPMENT_BUILD=1 sh scripts/build.sh

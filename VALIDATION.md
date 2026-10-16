@@ -239,3 +239,12 @@
 - 升级时取消的历史批次已在 20:15:25 由 Claude 成功恢复。观察结束无待处理或失败批次。后半段设备锁屏，后台按策略暂停；不是采集故障。7 次 doctor 查询中 3 次成功、4 次 LaunchServices 查询失败，后台 IPC 状态始终可读；查询失败不能直接认定权限丢失。
 - 采样到的 Daylog 主进程峰值 RSS 约 39.23 MiB，ps CPU 显示均为 0.0%；主进程累计 CPU 时间约增加 1.08 秒。这不含 Claude 子进程，也不是电池续航基准，不能推导持续活跃使用时的总开销。
 - 已重新生成本机真实 HTML。一次性观察/自动回访已停止，临时脚本和发布包副本已清理；保留私有诊断 JSON 与正常 Daylog 后台。未强制唤醒、修改电源策略或重新授权。
+
+## 2026-10-16 Windows 首版收尾（0.7.0，未公开发布）
+
+- 接续此前 Windows 隔离分支，合入主分支已有的 0.6.1 观察记录。Windows 10 1809+ / Windows 11 x64 实现包含主显示器与前台指定窗口采集、前台应用/空闲/锁屏/电源检测、当前用户后台、私有命名管道、DACL、Credential Manager、Agent Job Object 管理、PowerShell 安装和自更新；分析与 HTML 报告复用公共代码。
+- 重新核验 Windows CI [38571007786](https://github.com/cosin2077/daylog/actions/runs/38571007786)，提交 e54ff4b，Windows Server 2022 runner 上 Go 测试和 vet 成功；安装及版本帮助、合成采集、单实例、暂停/恢复/停止、本地结果入库及 HTML、生产更新器拒绝开发签名、安装包篡改/路径拒绝、同版本自更新、不同二进制 0.7.0→9.0.0 更新后后台重启全部成功。跨版本测试确认新二进制摘要不同、PID 更换、配置不变，测试记录明确 user_desktop_verified=false。9.0.0 仅为隔离开发夹具，不是正式发布版本。
+- 重新核验固定签名预检 [38570778654](https://github.com/cosin2077/daylog/actions/runs/38570778654)，提交 47f3e6a：macOS race/vet、双架构构建、隔离 runtime/安装器、三个平台 Release 打包以及 Windows PowerShell 5.1/7 正式签名包安装、运行中程序自更新、版本替换拒绝均成功。47f3e6a→e54ff4b 仅修改跨版本验证脚本，运行时代码相同；此预检 verify_only=true，没有创建 Release。
+- 本轮下载该预检产物，逐项核对 checksums.txt、三个平台包与 manifest 摘要、Windows ZIP 四个精确条目、x64 PE 架构、固定证书 RSA 签名及版本绑定。轻量 skill 含 Windows 安装器与平台说明且不带二进制。
+- 本机 macOS 再次执行 go test -race ./...、go vet ./... 及 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./... 均成功；保留既有 LC_DYSYMTAB 链接告警记录，不将其当作测试失败。skill quick_validate 和 git diff --check 通过。同步修正 README、发布/签名说明和 0.7.0 Release 草稿文案中的旧平台及签名描述。
+- 验证边界：没有 Windows 10/11 真实用户桌面、真实 Agent 登录/识图、多显示器、混合 DPI、HDR/DRM、RDP 或续航实测。Windows 包独立 RSA 签名不是 Authenticode，不提供 SmartScreen 信誉。公开 Latest 仍为 0.6.1，没有 Windows 附件；本轮完成实现与 CI，未公开 0.7.0、未替换本机正在使用的 0.6.1。

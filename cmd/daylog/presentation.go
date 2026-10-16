@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode"
@@ -112,7 +113,11 @@ func writeDoctor(w io.Writer, root string, env native.Environment, c journal.Con
 	if env.Permission {
 		permission = "已授权"
 	}
-	fmt.Fprintln(w, "  录屏权限  "+permission)
+	if runtime.GOOS == "windows" {
+		fmt.Fprintln(w, "  捕获方式  当前用户桌面（不需 macOS 式录屏授权）")
+	} else {
+		fmt.Fprintln(w, "  录屏权限  "+permission)
+	}
 	power := "外接电源"
 	if env.OnBattery {
 		power = "电池供电"

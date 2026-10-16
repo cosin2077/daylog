@@ -3,7 +3,7 @@ set -eu
 daylog_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$daylog_root"
 [ "$(uname -s)" = Darwin ] || { echo 'Native build requires macOS and Xcode Command Line Tools.' >&2; exit 1; }
-daylog_version=${DAYLOG_VERSION:-0.6.1}
+daylog_version=${DAYLOG_VERSION:-0.7.0}
 printf '%s\n' "$daylog_version" | /usr/bin/grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo 'DAYLOG_VERSION must be numeric major.minor.patch.' >&2; exit 1; }
 daylog_host=$(go env GOARCH)
 daylog_arches=$daylog_host
@@ -61,5 +61,6 @@ for daylog_arch in arm64 amd64; do
   fi
 done
 printf '}}\n' >> skills/daylog/assets/release.json
+if [ "${1:-}" = --all-arches ]; then DAYLOG_VERSION="$daylog_version" python3 scripts/build-windows.py; fi
 COPYFILE_DISABLE=1 tar -czf dist/daylog-skill-macos.tar.gz -C skills daylog
 echo "Built version $daylog_version: dist/Daylog.app and dist/daylog-skill-macos.tar.gz"

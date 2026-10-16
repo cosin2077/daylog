@@ -2,11 +2,11 @@ package journal
 
 import (
 	"context"
+	"daylog/internal/platform"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
-	"syscall"
 )
 
 // One lock and one failure round across every configured provider. Each actual
@@ -17,10 +17,10 @@ func (s *Store) analysisRound(ctx context.Context, id string, notifications bool
 		return err
 	}
 	defer lock.Close()
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err = platform.TryLock(lock); err != nil {
 		return errors.New("another analysis is running")
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	defer platform.Unlock(lock)
 	err = call()
 	if err != nil && ctx.Err() == nil && !errors.Is(err, ErrDailyBudget) && !errors.Is(err, ErrRetryCooling) {
 		if b, readErr := s.Batch(id); readErr == nil && b.LastError != "" {

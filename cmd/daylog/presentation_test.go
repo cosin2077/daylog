@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -76,7 +77,11 @@ func TestConfigDisplayHidesKeyButExplicitExportPreservesIt(t *testing.T) {
 func TestDoctorDisplayDistinguishesPolicyAndConfiguration(t *testing.T) {
 	var out bytes.Buffer
 	writeDoctor(&out, "/fixture", native.Environment{OnBattery: true, BatteryPercent: 70}, journal.DefaultConfig(), true)
-	for _, want := range []string{"电池供电", "接通电源后再处理", "未授权"} {
+	permissionText := "未授权"
+	if runtime.GOOS == "windows" {
+		permissionText = "当前用户桌面"
+	}
+	for _, want := range []string{"电池供电", "接通电源后再处理", permissionText} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatal("diagnostic state not explained")
 		}

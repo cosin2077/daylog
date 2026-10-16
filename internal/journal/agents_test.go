@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestAgentFallbackAndTemporaryCleanup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture; Windows process and adapter tests cover this platform")
+	}
 	s := testStore(t)
 	b := testBatch(t, s, time.Now())
 	report, _ := json.Marshal(testReport(b))
@@ -43,6 +47,9 @@ func TestAgentFallbackAndTemporaryCleanup(t *testing.T) {
 }
 
 func TestBackgroundAgentReusesLoginProviderEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture; Windows process and adapter tests cover this platform")
+	}
 	s := testStore(t)
 	b := testBatch(t, s, time.Now())
 	dir := t.TempDir()
@@ -77,6 +84,9 @@ func TestBackgroundAgentReusesLoginProviderEnvironment(t *testing.T) {
 }
 
 func TestLoginEnvironmentCancellationKeepsOriginalEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture; Windows process and adapter tests cover this platform")
+	}
 	dir := t.TempDir()
 	shell := filepath.Join(dir, "zsh")
 	if err := os.WriteFile(shell, []byte("#!/bin/sh\n/bin/sleep 30 &\nwait\n"), 0700); err != nil {
@@ -119,6 +129,9 @@ func TestDraftRecoveryDoesNotResetAttempts(t *testing.T) {
 }
 
 func TestAgentTimeoutDoesNotRunPastBudget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture; Windows process and adapter tests cover this platform")
+	}
 	dir := t.TempDir()
 	script := filepath.Join(dir, "claude")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\n/bin/sleep 30 &\nwait\n"), 0700); err != nil {
@@ -132,6 +145,9 @@ func TestAgentTimeoutDoesNotRunPastBudget(t *testing.T) {
 }
 
 func TestUnknownAgentIsDetectedWithoutInvocation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture; Windows process and adapter tests cover this platform")
+	}
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
 	t.Setenv("DAYLOG_AGENT_SEARCH_PATH", dir)
@@ -144,6 +160,9 @@ func TestUnknownAgentIsDetectedWithoutInvocation(t *testing.T) {
 }
 
 func TestCodexImportsOnlyDeclaredProviderCredential(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture; Windows process and adapter tests cover this platform")
+	}
 	root := t.TempDir()
 	shell := filepath.Join(root, "zsh")
 	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte("[model_providers.custom]\nenv_key = 'CUSTOM_PROVIDER_CREDENTIAL'\n"), 0600); err != nil {
@@ -164,6 +183,9 @@ func TestCodexImportsOnlyDeclaredProviderCredential(t *testing.T) {
 }
 
 func TestClaudeStructuredResultIsUsed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture; Windows process and adapter tests cover this platform")
+	}
 	dir := t.TempDir()
 	script := filepath.Join(dir, "claude")
 	event := `{"type":"result","is_error":false,"result":"done","structured_output":{"schema_version":2,"batch_id":"fixture","segments":[]}}`

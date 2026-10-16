@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +39,9 @@ func TestMinimalInterpretationStillRequiresEvidence(t *testing.T) {
 }
 
 func TestConfiguredFallbackCountsOneRoundAndSharesBudget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell fixture; Windows process and adapter tests cover this platform")
+	}
 	for _, success := range []bool{true, false} {
 		t.Run(map[bool]string{true: "success", false: "failed_round"}[success], func(t *testing.T) {
 			s := testStore(t)

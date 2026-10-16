@@ -2,6 +2,7 @@ package journal
 
 import (
 	"context"
+	"daylog/internal/platform"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,8 +10,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"daylog/internal/native"
@@ -55,10 +56,10 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 	defer lock.Close()
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err = platform.TryLock(lock); err != nil {
 		return errors.New("Daylog is already running")
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	defer platform.Unlock(lock)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	r.wake = make(chan struct{}, 1)
@@ -71,20 +72,11 @@ func (r *Runner) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	path := filepath.Join(r.Store.Root, "run.sock")
-	// Holding daemon.lock proves an old socket cannot have a live owner.
-	if err = os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	listener, err := net.Listen("unix", path)
+	listener, cleanup, err := platform.ListenControl(r.Store.Root)
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
-	defer os.Remove(path)
-	if err = os.Chmod(path, 0600); err != nil {
-		return err
-	}
+	defer cleanup()
 	var workers sync.WaitGroup
 	workers.Add(1)
 	go func() { defer workers.Done(); r.serve(ctx, listener, cancel) }()
@@ -163,7 +155,7 @@ func (r *Runner) serve(ctx context.Context, listener net.Listener, cancel contex
 
 func SendControl(root string, c Control) (Status, error) {
 	var status Status
-	conn, err := net.DialTimeout("unix", filepath.Join(root, "run.sock"), time.Second)
+	conn, err := platform.DialControl(root)
 	if err != nil {
 		return status, errors.New("Daylog is not running")
 	}
@@ -230,7 +222,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		return p.Delay
 	}
 	for _, blocked := range r.Config.BlockedApps {
-		if blocked == env.App {
+		if strings.EqualFold(blocked, env.App) {
 			r.noteState(now, "blocked", "")
 			r.mu.Lock()
 			r.status.SkippedBlocked++
@@ -349,7 +341,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		if gap > r.Config.MaxGapSeconds {
 			gap = r.Config.MaxGapSeconds
 		}
-		r.draft = Batch{AppSource: "window_server", SchemaVersion: 2, ID: ID(now), Start: now.UTC(), MaxGapSeconds: gap, SupportGapSeconds: r.Config.MaxGapSeconds}
+		r.draft = Batch{AppSource: native.AppSource, SchemaVersion: 2, ID: ID(now), Start: now.UTC(), MaxGapSeconds: gap, SupportGapSeconds: r.Config.MaxGapSeconds}
 	}
 	frame.Change = Difference(fp, r.lastFingerprint)
 	frame.Reason = "change"

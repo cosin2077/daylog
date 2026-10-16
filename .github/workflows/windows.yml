@@ -1,0 +1,35 @@
+name: Windows
+on:
+  push:
+    branches: [main, feature/windows-support]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Build Windows binary and development ZIP
+        shell: pwsh
+        run: |
+          $env:DAYLOG_DEVELOPMENT_BUILD='1'
+          python scripts/build-windows.py
+      - name: Verify installation, background lifecycle and self-update
+        run: python scripts/verify-windows.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-development
+          path: skills/daylog/assets/daylog-windows-amd64.zip
+          retention-days: 7

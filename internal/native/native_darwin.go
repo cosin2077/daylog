@@ -23,7 +23,7 @@ import (
 	"unsafe"
 )
 
-func (Mac) Environment(ctx context.Context) (Environment, error) {
+func (Desktop) Environment(ctx context.Context) (Environment, error) {
 	var env Environment
 	if err := ctx.Err(); err != nil {
 		return env, err
@@ -37,7 +37,7 @@ func (Mac) Environment(ctx context.Context) (Environment, error) {
 	return env, err
 }
 
-func (Mac) Capture(ctx context.Context, opts CaptureOptions) ([]byte, error) {
+func (Desktop) Capture(ctx context.Context, opts CaptureOptions) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -100,3 +100,5 @@ func DeleteSecret() error {
 	}
 	return nil
 }
+
+const AppSource = "window_server"

@@ -2,6 +2,8 @@ package journal
 
 import (
 	"context"
+	"daylog/internal/native"
+	"daylog/internal/platform"
 	"errors"
 	"fmt"
 	"os"
@@ -9,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -79,10 +80,10 @@ func (s *Store) RequestRetry(id string) error {
 		return err
 	}
 	defer lock.Close()
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err = platform.TryLock(lock); err != nil {
 		return errors.New("another analysis is running")
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	defer platform.Unlock(lock)
 	return s.locked(func() error {
 		b, err := s.Batch(id)
 		if err != nil {
@@ -117,6 +118,9 @@ func nextAnalysis(pending []Batch, now time.Time) (Batch, bool) {
 // A fixed notification contains no screenshot content, credentials or model
 // output. macOS notification preferences control whether a banner is shown.
 func notifyAnalysisFailure() error {
+	if runtime.GOOS == "windows" {
+		return native.NotifyAnalysisFailure()
+	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("system notification unsupported")
 	}

@@ -3,13 +3,13 @@ package journal
 import (
 	"bytes"
 	"context"
+	"daylog/internal/platform"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -17,6 +17,9 @@ import (
 // only when analyzing, then retain relevant provider variables in memory.
 // Neither screenshot text nor CLI arguments are interpolated into this shell.
 func loginAgentEnvironment(ctx context.Context, agent string, base []string) []string {
+	if platform.IsWindows {
+		return base
+	}
 	shell := "/bin/zsh"
 	for _, entry := range base {
 		if value, ok := strings.CutPrefix(entry, "SHELL="); ok && filepath.IsAbs(value) {
@@ -33,17 +36,10 @@ func loginAgentEnvironment(ctx context.Context, agent string, base []string) []s
 	cmd.Dir, _ = os.UserHomeDir()
 	cmd.Stdin = nil
 	cmd.Stderr = io.Discard
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
 	cmd.WaitDelay = time.Second
 	out := &cappedBuffer{max: 256 << 10}
 	cmd.Stdout = out
-	if cmd.Run() != nil {
+	if platform.RunProcess(cmd) != nil {
 		return base // File-based auth can still work without a shell profile.
 	}
 	marker := []byte("\x00DAYLOG_ENV_BEGIN\x00")

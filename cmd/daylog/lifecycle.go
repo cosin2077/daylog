@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
+	"daylog/internal/platform"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"daylog/internal/journal"
@@ -24,6 +24,9 @@ func installedExecutable() (string, error) {
 }
 
 func migrateDefaultData(ctx context.Context, root, command string) error {
+	if platform.IsWindows {
+		return nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -70,11 +73,7 @@ func migrateDefaultData(ctx context.Context, root, command string) error {
 }
 
 func removeServiceFile(home, root string) error {
-	err := os.Remove(service.Path(home, root))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
+	return service.Uninstall(home, root)
 }
 
 func stopRuntime(ctx context.Context, root string) error {
@@ -93,11 +92,11 @@ func stopRuntime(ctx context.Context, root string) error {
 	deadline := time.NewTimer(15 * time.Second)
 	defer deadline.Stop()
 	for {
-		if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
-			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		if err = platform.TryLock(f); err == nil {
+			_ = platform.Unlock(f)
 			return nil
 		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
+		if !errors.Is(err, platform.ErrBusy) {
 			return err
 		}
 		select {
@@ -215,7 +214,7 @@ func startRecording(ctx context.Context, s *journal.Store, login, asJSON bool) e
 func queryNativeEnvironment(ctx context.Context, root string) (native.Environment, error) {
 	handled, data, err := nativeAppResult(ctx, root, []string{"doctor", "--json"})
 	if !handled {
-		return (native.Mac{}).Environment(ctx)
+		return (native.Desktop{}).Environment(ctx)
 	}
 	if err != nil {
 		return native.Environment{}, err
