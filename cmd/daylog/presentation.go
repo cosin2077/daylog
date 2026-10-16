@@ -53,7 +53,7 @@ func enabled(value bool) string {
 func writeConfig(w io.Writer, root string, c journal.Config) {
 	fmt.Fprintln(w, "Daylog · 当前配置")
 	fmt.Fprintln(w, "  配置文件  "+filepath.Join(root, "config.json"))
-	mode := "仅记录，自动分析已关闭"
+	mode := "仅记录，自动整理已关闭"
 	if c.AI.Enabled {
 		mode = "自定义 API · " + readable(c.AI.Model)
 		if c.AI.FallbackAfterAgents {
@@ -62,7 +62,8 @@ func writeConfig(w io.Writer, root string, c journal.Config) {
 	} else if c.Agent.Enabled {
 		mode = "本机 Agent · " + strings.Join(c.Agent.Order, " → ")
 	}
-	fmt.Fprintln(w, "  分析方式  "+mode)
+	fmt.Fprintln(w, "\n常用")
+	fmt.Fprintln(w, "  整理方式  "+mode)
 	if c.AI.Enabled {
 		fmt.Fprintln(w, "  API 地址  "+readable(c.AI.Endpoint))
 		fmt.Fprintln(w, "  API 模型  "+readable(strings.Join(append([]string{c.AI.Model}, c.AI.FallbackModels...), " → ")))
@@ -76,9 +77,10 @@ func writeConfig(w io.Writer, root string, c journal.Config) {
 		fmt.Fprintln(w, "  密钥变量  "+readable(c.AI.KeyEnv))
 	}
 	fmt.Fprintf(w, "  截图间隔  插电至少 %s · 电池至少 %s\n", statusDuration(time.Duration(c.MinSaveSeconds)*time.Second), statusDuration(time.Duration(max(c.MinSaveSeconds, c.Power.BatteryIntervalSeconds))*time.Second))
-	fmt.Fprintf(w, "  分析批次  约每 %s · 目标 %d 张 / 最多 %d 张\n", statusDuration(time.Duration(c.BatchSeconds)*time.Second), min(c.TargetImages, c.MaxImages), c.MaxImages)
-	fmt.Fprintf(w, "  每日预算  %d 次调用尝试 · %d 张提交图片\n", c.AI.MaxRequestsPerDay, c.MaxImagesPerDay)
-	fmt.Fprintf(w, "  电池分析  %s · 电量不高于 %d%% 时暂停\n", enabled(c.Power.AnalyzeOnBattery), c.Power.PauseBelowPercent)
+	fmt.Fprintf(w, "  整理分段  约每 %s · 目标 %d 张 / 最多 %d 张\n", statusDuration(time.Duration(c.BatchSeconds)*time.Second), min(c.TargetImages, c.MaxImages), c.MaxImages)
+	fmt.Fprintf(w, "  每日额度  %d 次整理尝试 · %d 张图片\n", c.AI.MaxRequestsPerDay, c.MaxImagesPerDay)
+	fmt.Fprintf(w, "  电池整理  %s · 电量不高于 %d%% 时暂停\n", enabled(c.Power.AnalyzeOnBattery), c.Power.PauseBelowPercent)
+	fmt.Fprintln(w, "\n高级")
 	target := "主屏幕"
 	if c.WindowID != 0 {
 		target = fmt.Sprintf("窗口 %d", c.WindowID)
@@ -91,7 +93,7 @@ func writeConfig(w io.Writer, root string, c journal.Config) {
 	}
 	fmt.Fprintf(w, "  图像设置  高度 %d px · JPEG 质量 %d\n", c.Height, c.Quality)
 	fmt.Fprintf(w, "  保存期限  已处理原图按文件年龄保留 %d 天 · 日记 %d 天\n", c.RawRetentionDays, c.ReportRetentionDays)
-	fmt.Fprintf(w, "  存储上限  %s · 待处理最多 %d 批\n", statusBytes(c.MaxStorageBytes), c.MaxPendingBatches)
+	fmt.Fprintf(w, "  存储上限  %s · 待整理最多 %d 段\n", statusBytes(c.MaxStorageBytes), c.MaxPendingBatches)
 	blocked := "无"
 	if len(c.BlockedApps) > 0 {
 		blocked = readable(strings.Join(c.BlockedApps, "、"))
@@ -103,8 +105,8 @@ func writeConfig(w io.Writer, root string, c journal.Config) {
 	}
 	fmt.Fprintln(w, "  更新来源  "+updateSource)
 	fmt.Fprintln(w, "  失败通知  "+enabled(c.Diagnostics.FailureNotifications)+" · 连续重试失败超过 5 次后通知一次")
-	fmt.Fprintf(w, "  分析日志  %s · 保留 %d 天 · 上限 %s\n", enabled(c.Diagnostics.Enabled), c.Diagnostics.RetentionDays, statusBytes(c.Diagnostics.MaxBytes))
-	fmt.Fprintln(w, "\n修改方法：daylog config -h；完整结构化配置：daylog config --json。")
+	fmt.Fprintf(w, "  整理日志  %s · 保留 %d 天 · 上限 %s\n", enabled(c.Diagnostics.Enabled), c.Diagnostics.RetentionDays, statusBytes(c.Diagnostics.MaxBytes))
+	fmt.Fprintln(w, "\n修改方法：daylog config -h；结构化配置（密钥隐藏）：daylog config --json。")
 }
 
 func writeDoctor(w io.Writer, root string, env native.Environment, c journal.Config, valid bool) {
@@ -114,9 +116,9 @@ func writeDoctor(w io.Writer, root string, env native.Environment, c journal.Con
 		permission = "已授权"
 	}
 	if runtime.GOOS == "windows" {
-		fmt.Fprintln(w, "  捕获方式  当前用户桌面（不需 macOS 式录屏授权）")
+		doctorRow(w, "捕获方式", "当前用户桌面")
 	} else {
-		fmt.Fprintln(w, "  录屏权限  "+permission)
+		doctorRow(w, "录屏权限", permission)
 	}
 	power := "外接电源"
 	if env.OnBattery {
@@ -125,38 +127,46 @@ func writeDoctor(w io.Writer, root string, env native.Environment, c journal.Con
 	if env.BatteryPercent >= 0 {
 		power += fmt.Sprintf(" · %d%%", env.BatteryPercent)
 	}
-	fmt.Fprintln(w, "  电源状态  "+power)
-	fmt.Fprintln(w, "  低电量模式  "+enabled(env.LowPower))
+	doctorRow(w, "电源状态", power)
+	doctorRow(w, "低电量模式", enabled(env.LowPower))
 	thermal := "未知"
 	if env.Thermal >= 0 && env.Thermal < 4 {
 		thermal = []string{"正常", "偏热", "较高", "严重"}[env.Thermal]
 	}
-	fmt.Fprintln(w, "  系统热状态  "+thermal)
+	doctorRow(w, "系统热状态", thermal)
 	screen := "可用"
 	if env.Locked {
 		screen = "已锁定"
 	} else if env.ScreenOff {
 		screen = "屏幕休眠"
 	}
-	fmt.Fprintln(w, "  屏幕状态  "+screen)
+	doctorRow(w, "屏幕状态", screen)
 	if valid {
-		fmt.Fprintln(w, "  配置检查  正常")
+		doctorRow(w, "配置检查", "正常")
 		policy := journal.PowerPolicy(c, env)
-		analysis := "电源策略允许（不代表已启用分析或正在分析）"
+		text := "允许整理"
 		if !policy.CanAnalyze {
-			analysis = "暂缓分析"
+			text = "暂缓整理"
 		}
 		if policy.PauseReason != "" {
-			analysis += " · " + recordingReason(policy.PauseReason)
+			text += " · " + recordingReason(policy.PauseReason)
 		} else if env.OnBattery && !c.Power.AnalyzeOnBattery {
-			analysis += " · 电池供电，接通电源后再处理"
+			text += " · 电池供电，接通电源后再处理"
 		}
-		fmt.Fprintln(w, "  分析策略  "+analysis)
+		doctorRow(w, "整理策略", text)
 	} else {
-		fmt.Fprintln(w, "  配置检查  无效，请检查 config.json；暂不能判断分析策略")
+		doctorRow(w, "配置检查", "无效，请检查 config.json；暂不能判断整理策略")
 	}
-	fmt.Fprintln(w, "  数据目录  "+root)
-	fmt.Fprintln(w, "\n这次检查没有截图；授权状态不代表实际捕获已经验证。")
+	for _, model := range doctorModels(root, c) {
+		text := model.State
+		if model.LastAt != nil {
+			text += " · " + model.LastAt.Local().Format("01-02 15:04")
+		}
+		doctorRow(w, model.Name, text)
+	}
+	doctorRow(w, "数据目录", root)
+	fmt.Fprintln(w, "\n模型显示最近结果；本次未截图或联网测试。")
+	fmt.Fprintln(w, "查看待整理原因：daylog pending；手动重试：daylog analyze --retry。")
 }
 
 func writeAgents(w io.Writer, agents []journal.AgentInfo) {
@@ -165,9 +175,9 @@ func writeAgents(w io.Writer, agents []journal.AgentInfo) {
 		state := "未安装"
 		if a.Installed {
 			if a.Supported {
-				state = "已安装 · 支持图片分析适配"
+				state = "已安装 · 支持图片识别适配"
 			} else {
-				state = "已安装 · 暂无图片分析适配"
+				state = "已安装 · 暂无图片识别适配"
 			}
 		}
 		fmt.Fprintf(w, "  %-12s %s\n", a.Name, state)
@@ -193,25 +203,33 @@ func writeWindows(w io.Writer, windows []native.Window) {
 
 func writePending(w io.Writer, batches []journal.Batch, total int) {
 	if total == 0 {
-		fmt.Fprintln(w, "没有待整理的批次。")
+		fmt.Fprintln(w, "没有待整理的记录。")
 		return
 	}
-	fmt.Fprintf(w, "Daylog · 待整理 %d 批（显示 %d 批）\n", total, len(batches))
+	fmt.Fprintf(w, "Daylog · 待整理 %d 段", total)
+	if len(batches) < total {
+		fmt.Fprintf(w, "（显示 %d 段）", len(batches))
+	}
+	fmt.Fprintln(w)
 	if len(batches) < total {
 		fmt.Fprintf(w, "查看全部：daylog pending --limit %d\n", total)
 	}
 	for _, b := range batches {
-		fmt.Fprintf(w, "\n  %s — %s\n", b.Start.Local().Format("2006-01-02 15:04"), b.End.Local().Format("2006-01-02 15:04"))
-		fmt.Fprintf(w, "  %d 张关键帧 · 调用尝试 %d 次\n  批次：%s\n", len(b.Frames), b.Attempts, b.ID)
+		fmt.Fprintf(w, "\n  %s — %s · %d 张截图\n", b.Start.Local().Format("01-02 15:04"), b.End.Local().Format("15:04"), len(b.Frames))
 		if b.LastError != "" {
-			fmt.Fprintln(w, "  状态："+analysisReason(b.LastError))
-			fmt.Fprintf(w, "  整轮失败：%d 次（全部候选失败才计一轮，取消不计）\n  手动重试：daylog analyze --batch %s --retry\n", b.FailureRounds, b.ID)
+			if journal.PreparationState(b) == "interrupted" {
+				fmt.Fprintln(w, "  已中断；后台运行后会继续整理")
+			} else {
+				fmt.Fprintln(w, "  暂未成功："+journal.FailureReason(b.LastError))
+			}
+		} else {
+			fmt.Fprintln(w, "  等待整理")
 		}
 		if next := journal.RetryTime(b); next.After(time.Now()) {
-			fmt.Fprintln(w, "  下次可重试："+next.Local().Format("15:04:05"))
+			fmt.Fprintln(w, "  下次尝试："+next.Local().Format("15:04:05"))
 		}
 	}
-	fmt.Fprintln(w, "\n后台会在策略允许时整理；也可用 daylog analyze 手动处理一批。")
+	fmt.Fprintln(w, "\n立即整理一段：daylog analyze；需要编号或调用详情时用 --json。")
 }
 
 func analysisReason(reason string) string {
@@ -222,7 +240,7 @@ func analysisReason(reason string) string {
 		return "模型调用超时；请检查 Agent 的网络和模型状态，详情见 logs/llm；可用 daylog config --agent-timeout 调整时限"
 	}
 	if strings.Contains(reason, "canceled") {
-		return "调用已取消；本次取消不计整轮失败，截图仍保留"
+		return "整理已中断；不计失败，后台运行后会继续处理"
 	}
 	if strings.Contains(reason, "missing_result") {
 		return "Agent 没有返回完整结果；请检查其非交互调用和模型状态，详情见 logs/llm"
@@ -260,7 +278,7 @@ func analysisReason(reason string) string {
 		return "模型结果未通过格式或证据校验，未保存为日记"
 	}
 	if strings.HasPrefix(reason, "agent_failed:") {
-		return readable(strings.TrimPrefix(reason, "agent_failed:")) + " 分析未成功，请检查登录状态和模型的图片能力"
+		return readable(strings.TrimPrefix(reason, "agent_failed:")) + " 整理未成功，请检查登录状态和模型的图片能力"
 	}
 	return "整理暂未完成，可用 daylog doctor 检查运行环境"
 }

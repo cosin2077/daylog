@@ -264,3 +264,14 @@
 - go vet ./... 与 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./... 均通过。0.7.0 开发构建生成 macOS arm64 / amd64 与 Windows x64；固定发布者 pin 配置、skill quick_validate、git diff --check 均通过。
 - scripts/verify-runtime.py --skip-native-check 和 scripts/verify-installer.py 均成功，覆盖隔离采集/单实例/暂停恢复停止、本地记录与范围报告、开发更新、技能安装，以及真实本机 HTTP 下载、平台选择、重复安装、摘要/路径/链接/发布者拒绝。夹具和服务均清理；这是合成数据验证，不代表真实模型或 Windows 用户桌面 E2E。
 - 本机升级前为 0.6.1，后台停止。配置与已安装二进制摘要、签名 requirement 已记录，更新源为公开 Latest。一次 CLI doctor 查询失败；随后通过正式 App 身份的直接 LaunchServices 查询（临时目录及实际数据目录）均成功，录屏权限 true、配置摘要未变。此差异仍不作为原生查询故障根因已修复的证据。
+
+
+## 2026-10-16 复盘报告与 CLI UX（0.8.0）
+
+- 逐条判断见 docs/ux-review-v3.md。报告首屏、任务排行、当天时间轴、真实应用来源折叠、周趋势/月历与上期比较重做；统计只复用已有结果，不新增模型请求。CLI 增加命令专属帮助、自然参数、精简状态、统一中断/失败、有效暂停范围、空日期和缺失编号提示，配置 JSON 默认打码。
+- 完整 go test -race -json -count=1 -timeout=180s ./... 成功：110 个顶层测试、含子测试 159 项通过。此前沙箱受限的四个 HTTP/TCP 夹具全部通过。macOS 仅跳过明确仅 Windows 的 TestWindowsDevelopmentSourceRecognizesDrivePaths；另四个包没有测试文件。保留已知 LC_DYSYMTAB 链接告警，不将告警当作失败。
+- 新增覆盖本地日历进度的周/月环比、短月、跨年与 DST、历史缺失、应用来源数量守恒、无 TaskID 不合并、总结按有效时长、单帧零时长与跨日裁剪一致性、live/stopped 队列刷新、控制服务暂停恢复确认、所有命令帮助无初始化副作用、参数冲突/未知选项、缺失与损坏编号区分、默认 pending 上限、配置打码回导和 doctor 历史元数据。America/Los_Angeles 下的自然日期、跨日计数与空日期回归另通过。
+- go vet ./...、Windows amd64 交叉 vet、三平台 0.8.0 开发构建、发布者 pin 检查、skill quick_validate、报告 JavaScript 语法与 git diff --check 均通过。隔离 verify-runtime.py --skip-native-check 与 verify-installer.py 通过，包含本地 HTTP 下载、合成采集、单实例、暂停恢复停止、报告、安装/更新与拒绝夹具；均清理临时数据与进程。
+- Chrome Kevin profile 的独立任务标签通过本机 HTTP 加载显式标注的合成报告。实际 CSS 视口 1440×1000 与 390×844 均无横向溢出；默认手机日报约 1516px。验证日周月、真实数字环比、长标题、任务联动、搜索、类型过滤、两页共 19 项活动、来源 Top 3/其余展开、空日期、月历跳转和详情。打印预览包含全部 19 项及详情，取消后恢复默认折叠与 12 条分页。报告未发现 error/warn；用户 Web Assist 扩展出现自身截图预热警告，未修改扩展或放宽报告 CSP。已更新演示预览图。
+- 同日真实 JSON 的只读计数为 today 180 / report 180，未复现评审快照的 179 / 175，不推断原差异原因。单帧被过滤的问题由合成失败回归独立确认并修复。没有重跑用户历史整理、改写 ~/.daylog、更换本机 0.7.0 或同步本机 skill。
+- 本轮验证不包含真实模型识图、采样召回或电池基准。Windows 真实执行、PowerShell 安装和运行中升级以该提交的平台 CI 为准，不等同于 Windows 10/11 用户桌面 E2E。正式包按 docs/releasing.md 在全部 CI 与 Release 签名检查成功后核验并公开。

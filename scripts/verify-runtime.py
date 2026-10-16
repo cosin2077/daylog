@@ -88,7 +88,7 @@ try:
         parts = run(['/bin/ps', '-o', 'rss=,pcpu=,nice=', '-p', str(proc.pid)]).split()
         samples.append({'rss_kib': int(parts[0]), 'cpu_percent': float(parts[1]), 'nice': int(parts[2])})
     result['idle_fixture_samples'] = samples
-    assert '暂停' in cli('pause', '--minutes', '0')
+    assert '暂停' in cli('pause', '--minutes', '30')
     deadline = time.monotonic() + 5
     while not json.loads(cli('status', '--json'))['paused']:
         if time.monotonic() > deadline:

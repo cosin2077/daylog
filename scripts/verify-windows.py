@@ -63,7 +63,7 @@ try:
     process=subprocess.Popen([str(exe),'--data',str(data),'run','--fixture',str(fixture)],cwd=repo,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     initial=wait_status(lambda s:s['saved_frames']>0)
     cli('run','--fixture',fixture,expected=1)
-    cli('pause','--minutes','0');wait_status(lambda s:s['paused'])
+    cli('pause','--minutes','30');wait_status(lambda s:s['paused'])
     cli('resume');wait_status(lambda s:not s['paused'])
     cli('stop');process.wait(timeout=15)
     result['synthetic_capture_single_instance_pause_stop']=True

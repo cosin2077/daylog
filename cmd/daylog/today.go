@@ -13,6 +13,7 @@ func todayCommand(s *journal.Store, args []string) error {
 	date := f.String("date", time.Now().Format("2006-01-02"), "local calendar day")
 	asJSON := f.Bool("json", false, "complete JSON export")
 	full := f.Bool("full", false, "show every activity in human output")
+	explain := f.Bool("explain", false, "show timing method and limitations")
 	limit := f.Int("limit", 20, "maximum visible activities in human output")
 	if err := f.Parse(args); err != nil {
 		return err
@@ -39,28 +40,28 @@ func todayCommand(s *journal.Store, args []string) error {
 			count++
 		}
 	}
-	for _, report := range reports {
-		total += len(report.Cards)
-	}
+	view := journal.BuildOverview(start, reports, pending, journal.Batch{}).Views[0]
+	total = len(view.Activities)
 	if *asJSON {
-		return output(map[string]any{"date": *date, "reports": reports, "pending_batches": count})
+		return output(map[string]any{"date": *date, "reports": reports, "activities": view.Activities, "activity_count": total, "pending_batches": count})
 	}
-	fmt.Printf("Daylog · %s\n\n", *date)
+	weekdays := []string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
+	fmt.Printf("Daylog · %s %s · %d 项活动", start.Format("1月2日"), weekdays[start.Weekday()], total)
+	if count > 0 {
+		fmt.Printf(" · 还有 %d 段待整理", count)
+	}
+	fmt.Print("\n\n")
 	if total > 0 {
-		for _, summary := range journal.BuildOverview(start, reports, pending, journal.Batch{}).Views {
-			if summary.Period != "day" {
-				continue
-			}
-			fmt.Printf("%d 个活动片段", total)
+		{
+			summary := view
 			if summary.EstimatedSeconds > 0 {
-				fmt.Printf(" · 观察估计 %s", statusDuration(time.Duration(summary.EstimatedSeconds)*time.Second))
+				fmt.Printf("活动估计 %s\n", statusDuration(time.Duration(summary.EstimatedSeconds)*time.Second))
 			}
-			if summary.UnknownSeconds > 0 {
-				fmt.Printf(" · 已分析时段内 %s 无法估时", statusDuration(time.Duration(summary.UnknownSeconds)*time.Second))
+			if *explain && summary.UnknownSeconds > 0 {
+				fmt.Printf("另有 %s 无法估时。\n", statusDuration(time.Duration(summary.UnknownSeconds)*time.Second))
 			}
-			fmt.Println()
-			if summary.UnknownSeconds > summary.EstimatedSeconds {
-				fmt.Println("大部分已分析时段无法估时：单帧、采样间隔过大、任务切换或低置信识别都可能留下缺口。未分析批次另行列出；这不代表没有活动。")
+			if *explain && summary.UnknownSeconds > summary.EstimatedSeconds {
+				fmt.Println("单帧、截图间隔过大、任务切换或识别不确定都可能无法估时；待整理记录另行列出。")
 			}
 			tasks := 0
 			for _, task := range summary.Tasks {
@@ -80,18 +81,16 @@ func todayCommand(s *journal.Store, args []string) error {
 		}
 	}
 	shown := 0
-	for _, report := range reports {
-		for _, card := range report.Cards {
-			if !*full && shown >= *limit {
-				continue
-			}
-			fmt.Printf("  %s–%s  %s\n    %s", card.Start.Local().Format("15:04"), card.End.Local().Format("15:04"), readable(card.Title), readable(card.Summary))
-			if card.DurationMethod != "" {
-				fmt.Printf("（%s）", observationDuration(card.EstimatedSeconds))
-			}
-			fmt.Println()
-			shown++
+	for _, card := range view.Activities {
+		if !*full && shown >= *limit {
+			continue
 		}
+		fmt.Printf("  %s–%s  %s\n    %s", card.Start.Local().Format("15:04"), card.End.Local().Format("15:04"), readable(card.Title), readable(card.Summary))
+		if card.DurationMethod != "" {
+			fmt.Printf("（%s）", observationDuration(card.EstimatedSeconds))
+		}
+		fmt.Println()
+		shown++
 	}
 	if shown < total {
 		fmt.Printf("\n已显示 %d / %d 条；查看完整日记：daylog today --date %s --full；也可用 --limit 调整。\n", shown, total, *date)
@@ -99,8 +98,8 @@ func todayCommand(s *journal.Store, args []string) error {
 	if total == 0 {
 		writeEmptyToday(s, start)
 	}
-	if count > 0 {
-		fmt.Printf("\n还有 %d 段活动尚未整理，日记暂不完整。\n", count)
+	if *explain {
+		fmt.Println("\n时长来自截图观察估计；未估时表示记录不足，不能作为精确工时。")
 	}
 	return nil
 }
@@ -109,11 +108,11 @@ func writeEmptyToday(s *journal.Store, date time.Time) {
 	fmt.Println("这个日期还没有已整理的日记。")
 	if status, err := journal.SendControl(s.Root, journal.Control{Op: "status"}); err == nil {
 		if status.Paused {
-			fmt.Println("后台已暂停；运行 daylog start 继续。")
+			fmt.Println("后台已暂停；运行 daylog resume 继续。")
 		} else if status.Error != "" {
 			fmt.Println(recordingReason(status.Error))
 		} else {
-			fmt.Println("后台正在记录，待本批整理完成后再查看。")
+			fmt.Println("后台正在记录，待这段记录整理完成后再查看。")
 		}
 	} else if stopped, err := recorderStopped(s.Root); err == nil && stopped {
 		fmt.Println("后台已停止；运行 daylog start 开始记录。")

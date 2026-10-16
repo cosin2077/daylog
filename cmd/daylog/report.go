@@ -14,6 +14,7 @@ const reportHelp = `Daylog — 可视化报告
 
   daylog report                       打开报告，在页面中切换日／周／月
   daylog report --period week          默认展示本周
+  daylog report week|month             周报或月报的自然写法
   daylog report --period month         默认展示本月
   daylog report --date 2026-10-13       查看指定日期所在的日／周／月
   daylog report --no-open              生成 HTML，输出路径而不打开浏览器
@@ -85,11 +86,23 @@ func reportCommand(ctx context.Context, s *journal.Store, args []string) error {
 }
 
 func presentOverview(ctx context.Context, s *journal.Store, overview journal.Overview, period string, noOpen bool) error {
+	for _, view := range overview.Views {
+		if view.Period == period && len(view.Activities) == 0 && view.PendingBatches == 0 && view.DraftFrames == 0 {
+			fmt.Printf("%s 没有记录。\n", view.Anchor)
+			if latest, err := s.LatestActivityDate(); err == nil && !latest.IsZero() {
+				fmt.Printf("最近有记录：%s（daylog report --date %s）\n", latest.Format("01-02"), latest.Format("2006-01-02"))
+			}
+			return nil
+		}
+	}
 	path, err := s.WriteHTML(overview, period)
 	if err != nil {
 		return err
 	}
 	fmt.Println("报告已生成：" + path)
+	if noOpen {
+		fmt.Println("在浏览器中打开上面的 HTML 文件即可查看。")
+	}
 	if !noOpen {
 		if err = openReport(ctx, path); err != nil {
 			return fmt.Errorf("报告已保存，自动打开失败：%w", err)

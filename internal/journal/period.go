@@ -2,7 +2,6 @@ package journal
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -65,10 +64,13 @@ type TimeBucket struct {
 }
 
 type PeriodReport struct {
-	Continuity   ContinuitySummary `json:"continuity"`
-	UnknownSpans []TimeSpan        `json:"unknown_spans,omitempty"`
-	Failures     []AnalysisFailure `json:"failures"`
-	Distribution []TimeBucket      `json:"distribution"`
+	Comparison         *PeriodComparison `json:"comparison,omitempty"`
+	Review             ReviewSummary     `json:"review"`
+	InterruptedBatches int               `json:"interrupted_batches"`
+	Continuity         ContinuitySummary `json:"continuity"`
+	UnknownSpans       []TimeSpan        `json:"unknown_spans,omitempty"`
+	Failures           []AnalysisFailure `json:"failures"`
+	Distribution       []TimeBucket      `json:"distribution"`
 
 	LegacyAppMetadata     bool              `json:"legacy_app_metadata"`
 	InterpolatedSeconds   int64             `json:"interpolated_seconds"`
@@ -122,6 +124,7 @@ func (s *Store) Overview(anchor time.Time) (Overview, error) {
 	var overview Overview
 	err := s.locked(func() error {
 		start, end, _ := PeriodBounds("month", anchor)
+		start = start.AddDate(0, -1, 0)
 		weekStart, weekEnd, _ := PeriodBounds("week", anchor)
 		if weekStart.Before(start) {
 			start = weekStart
@@ -155,7 +158,9 @@ func BuildOverview(anchor time.Time, reports []Report, pending []Batch, draft Ba
 	}
 	o := Overview{Anchor: anchor.Format("2006-01-02"), GeneratedAt: time.Now().In(anchor.Location()), Timezone: zone, Views: []PeriodReport{}}
 	for _, kind := range []string{"day", "week", "month"} {
-		o.Views = append(o.Views, buildPeriod(kind, anchor, reports, pending, draft))
+		view := buildPeriod(kind, anchor, reports, pending, draft)
+		view.Comparison = buildComparison(kind, anchor, o.GeneratedAt, reports)
+		o.Views = append(o.Views, view)
 	}
 	start, end, _ := PeriodBounds("month", anchor)
 	weekStart, weekEnd, _ := PeriodBounds("week", anchor)
@@ -166,7 +171,9 @@ func BuildOverview(anchor time.Time, reports []Report, pending []Batch, draft Ba
 		end = weekEnd
 	}
 	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
-		o.Calendar = append(o.Calendar, buildPeriod("day", day, reports, pending, draft))
+		view := buildPeriod("day", day, reports, pending, draft)
+		view.Comparison = buildComparison("day", day, o.GeneratedAt, reports)
+		o.Calendar = append(o.Calendar, view)
 	}
 	return o
 }
@@ -221,6 +228,7 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 	categorySpans := map[string][]span{}
 	taskSpans := map[string][]span{}
 	taskTitles := map[string]string{}
+	taskTitleSeconds := map[string]int64{}
 	for _, r := range reports {
 		if r.SchemaVersion == 2 && r.AppSource == "" && r.Start.Before(end) && r.End.After(start) {
 			p.LegacyAppMetadata = true
@@ -235,7 +243,7 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 		}
 		for _, c := range r.Cards {
 			from, to := c.Start.In(start.Location()), c.End.In(start.Location())
-			if !from.Before(end) || !to.After(start) {
+			if !activityInRange(c.Start, c.End, start, end) {
 				continue
 			}
 			if from.Before(start) {
@@ -249,7 +257,8 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 				evidence[id] = true
 			}
 			// A card crossing midnight is shown as two date-local fragments.
-			for from.Before(to) {
+			instant := from.Equal(to)
+			for from.Before(to) || instant {
 				midnight := time.Date(from.Year(), from.Month(), from.Day()+1, 0, 0, 0, 0, from.Location())
 				until := to
 				if until.After(midnight) {
@@ -276,8 +285,13 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 					a.EstimatedSeconds = covered(append([]span(nil), parts...))
 					estimated = append(estimated, parts...)
 					categorySpans[a.Category] = append(categorySpans[a.Category], parts...)
-					taskSpans[c.TaskID] = append(taskSpans[c.TaskID], parts...)
-					taskTitles[c.TaskID] = c.Title
+					if c.TaskID != "" {
+						taskSpans[c.TaskID] = append(taskSpans[c.TaskID], parts...)
+						if _, exists := taskTitles[c.TaskID]; !exists || a.EstimatedSeconds > taskTitleSeconds[c.TaskID] {
+							taskTitles[c.TaskID] = c.Title
+							taskTitleSeconds[c.TaskID] = a.EstimatedSeconds
+						}
+					}
 				} else {
 					parts = []span{{from, until}}
 					legacy = append(legacy, parts...)
@@ -290,6 +304,9 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 				dayCount[day]++
 				counts[a.Category]++
 				from = until
+				if instant {
+					break
+				}
 			}
 		}
 	}
@@ -297,7 +314,10 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 	for _, b := range pending {
 		if b.Start.Before(end) && b.End.After(start) {
 			p.PendingBatches++
-			if b.LastError != "" {
+			if PreparationState(b) == "interrupted" {
+				p.InterruptedBatches++
+			}
+			if PreparationState(b) == "failed" {
 				p.FailedBatches++
 				p.Failures = append(p.Failures, AnalysisFailure{b.ID, FailureReason(b.LastError), b.FailureRounds, RetryTime(b).In(start.Location()), b.FailureRounds > 6})
 			}
@@ -376,25 +396,20 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 		p.Distribution = append(p.Distribution, bucket)
 		at = until
 	}
-	if len(p.Activities) == 0 {
-		p.Summary = "这个时间范围还没有已整理的活动。"
-	} else {
-		ordered := append([]CategorySummary(nil), p.Categories...)
-		sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Count > ordered[j].Count })
-		p.Summary = fmt.Sprintf("%d 个有记录的日期，整理了 %d 个活动片段；记录最多的类型是%s。", p.ActiveDays, len(p.Activities), ordered[0].Name)
-	}
-	if len(p.Tasks) > 0 {
-		names := []string{}
-		for i, t := range p.Tasks {
-			if i == 3 {
-				break
-			}
-			names = append(names, t.Title)
-		}
-		p.Summary = fmt.Sprintf("主要涉及%s；观察可支持的活动估计约 %d 分钟，已分析批次内另有约 %d 分钟无法判断。", strings.Join(names, "、"), p.EstimatedSeconds/60, p.UnknownSeconds/60)
-	}
 	p.Continuity = buildContinuity(start, end, reports)
+	p.Review = buildReview(p)
+	p.Summary = p.Review.Headline
 	return p
+}
+
+func activityInRange(from, to, start, end time.Time) bool {
+	if to.Before(from) {
+		return false
+	}
+	if from.Equal(to) {
+		return !from.Before(start) && from.Before(end)
+	}
+	return from.Before(end) && to.After(start)
 }
 
 func clipSpan(p TimeSpan, start, end time.Time) (span, bool) {

@@ -17,6 +17,18 @@ import (
 var ErrDailyBudget = errors.New("daily analysis budget reached")
 var ErrRetryCooling = errors.New("analysis retry is cooling down")
 
+// One state vocabulary for CLI, live status and saved reports. An interrupted
+// attempt is not a failed preparation round, including older queue records.
+func PreparationState(b Batch) string {
+	if strings.Contains(b.LastError, "canceled") {
+		return "interrupted"
+	}
+	if b.LastError != "" {
+		return "failed"
+	}
+	return "pending"
+}
+
 func RetryTime(b Batch) time.Time {
 	if b.RetryAfter != nil {
 		return *b.RetryAfter
@@ -65,10 +77,10 @@ func (s *Store) finishFailure(id, reason string, notify func() error) error {
 			if notifyErr := notify(); notifyErr == nil {
 				b.FailureNotified = true
 			} else {
-				fmt.Fprintln(os.Stderr, "Daylog: 系统通知未提交；请用 daylog status / report 查看持续失败的批次")
+				fmt.Fprintln(os.Stderr, "Daylog: 系统通知未提交；请用 daylog status / report 查看持续失败的记录")
 			}
 		}
-		fmt.Fprintf(os.Stderr, "Daylog: 分析失败 · %s · %s · 第 %d 轮 · 下次 %s · 重试：daylog analyze --batch %s --retry\n", b.ID, FailureReason(reason), b.FailureRounds, next.Local().Format("01-02 15:04"), b.ID)
+		fmt.Fprintf(os.Stderr, "Daylog: 整理失败 · %s · %s · 第 %d 轮 · 下次 %s · 重试：daylog analyze --batch %s --retry\n", b.ID, FailureReason(reason), b.FailureRounds, next.Local().Format("01-02 15:04"), b.ID)
 		return WriteJSON(filepath.Join(s.Root, "batches", id+".json"), b)
 	})
 }
@@ -118,7 +130,7 @@ func nextAnalysis(pending []Batch, now time.Time) (Batch, bool) {
 // A fixed notification contains no screenshot content, credentials or model
 // output. macOS notification preferences control whether a banner is shown.
 func failureNotification(reason string) string {
-	return "活动分析连续重试失败超过 5 次。最近原因：" + FailureReason(reason) + "。截图已保留；运行 daylog status 或 daylog report 查看。"
+	return "活动整理连续重试失败超过 5 次。最近原因：" + FailureReason(reason) + "。截图已保留；运行 daylog status 或 daylog report 查看。"
 }
 
 func notifyAnalysisFailure(reason string) error {
@@ -131,7 +143,7 @@ func notifyAnalysisFailure(reason string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "/usr/bin/osascript", "-e", fmt.Sprintf(`display notification %q with title "Daylog · 分析需要关注"`, message)).Run()
+	return exec.CommandContext(ctx, "/usr/bin/osascript", "-e", fmt.Sprintf(`display notification %q with title "Daylog · 整理需要关注"`, message)).Run()
 }
 
 // Safe, stable descriptions for exported reports; raw transport text stays in
@@ -157,6 +169,6 @@ func FailureReason(reason string) string {
 	case strings.Contains(reason, "evidence"):
 		return "截图证据不可用"
 	default:
-		return "分析尚未成功，请查看本地 LLM 日志"
+		return "整理尚未成功，请用 daylog doctor 检查"
 	}
 }

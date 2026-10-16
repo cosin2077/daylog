@@ -429,7 +429,7 @@ func (s *Store) Reports(start, end time.Time) ([]Report, error) {
 			}
 			cards := []Card{}
 			for _, card := range r.Cards {
-				if card.Start.Before(end) && card.End.After(start) {
+				if activityInRange(card.Start, card.End, start, end) {
 					cards = append(cards, card)
 				}
 			}

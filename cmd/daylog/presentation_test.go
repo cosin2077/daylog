@@ -76,6 +76,13 @@ func TestConfigDisplayHidesKeyButExplicitExportPreservesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	var config journal.Config
+	if err := json.Unmarshal(out.Bytes(), &config); err != nil || config.AI.APIKey != "<REDACTED>" || strings.Contains(out.String(), key) {
+		t.Fatal("default JSON exposed a key")
+	}
+	out.Reset()
+	if err := configure(s, []string{"--json", "--show-secrets"}, strings.NewReader(""), &out, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := json.Unmarshal(out.Bytes(), &config); err != nil || config.AI.APIKey != key {
 		t.Fatal("explicit JSON is no longer a complete config")
 	}
@@ -95,7 +102,7 @@ func TestDoctorDisplayDistinguishesPolicyAndConfiguration(t *testing.T) {
 	}
 	out.Reset()
 	writeDoctor(&out, "/fixture", native.Environment{}, journal.DefaultConfig(), false)
-	if !strings.Contains(out.String(), "暂不能判断分析策略") || strings.Contains(out.String(), "电源策略允许") {
+	if !strings.Contains(out.String(), "暂不能判断整理策略") || strings.Contains(out.String(), "允许整理") {
 		t.Fatal("invalid config produced reassuring policy")
 	}
 }

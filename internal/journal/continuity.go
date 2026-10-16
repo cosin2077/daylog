@@ -16,6 +16,7 @@ type TaskReturn struct {
 // A short visit bracketed by another task on both sides. The surrounding
 // transition gaps locate the visit but are never charged to the visited task.
 type TimeFragment struct {
+	SourceApps       []string  `json:"source_apps,omitempty"`
 	TaskID           string    `json:"task_id"`
 	Title            string    `json:"title"`
 	Category         string    `json:"category"`
@@ -36,6 +37,7 @@ type FragmentDestination struct {
 }
 
 type ContinuitySummary struct {
+	FragmentSources           []FragmentSource      `json:"fragment_sources,omitempty"`
 	Fragments                 []TimeFragment        `json:"fragments,omitempty"`
 	FragmentDestinations      []FragmentDestination `json:"fragment_destinations,omitempty"`
 	FragmentSeconds           int64                 `json:"fragment_seconds"`
@@ -215,7 +217,15 @@ func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 		}
 	}
 	byTask := map[string]*FragmentDestination{}
-	for _, f := range result.Fragments {
+	for i := range result.Fragments {
+		f := &result.Fragments[i]
+		seen := map[string]bool{}
+		for _, point := range unique {
+			if point.TaskID == f.TaskID && !point.At.Before(f.Start) && !point.At.After(f.End) && point.App != "" && !seen[point.App] {
+				seen[point.App] = true
+				f.SourceApps = append(f.SourceApps, point.App)
+			}
+		}
 		d := byTask[f.TaskID]
 		if d == nil {
 			d = &FragmentDestination{TaskID: f.TaskID, Title: f.Title}
@@ -225,6 +235,7 @@ func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 		d.EstimatedSeconds += f.EstimatedSeconds
 		result.FragmentSeconds += f.EstimatedSeconds
 	}
+	result.FragmentSources = fragmentSources(result.Fragments)
 	for _, d := range byTask {
 		result.FragmentDestinations = append(result.FragmentDestinations, *d)
 	}

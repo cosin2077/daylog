@@ -20,21 +20,21 @@ import (
 	"daylog/internal/update"
 )
 
-var version = "0.7.0"
+var version = "0.8.0"
 
 const help = `Daylog — 自动记录今天做了什么
 
-  daylog start    开始记录，自动准备环境；首次按系统提示授权
+  daylog start    开始记录（首次需授权录屏）
   daylog today    查看今天的日记
   daylog report   打开日／周／月可视化报告
-  daylog status   查看运行状态、采集数量和待整理记录
+  daylog status   查看运行状态和待整理记录
   daylog stop     停止记录
   daylog config   查看或配置模型（可选，使用 config -h 查看方法）
   daylog update   更新版本
   daylog -h       显示帮助（直接运行 daylog 也可以）
 
 配置、截图和日记都在 ~/.daylog。
-自动使用本机 Agent 的模型配置，分析时可能调用云端服务。
+自动使用本机 Agent 的模型配置，整理时可能调用云端服务。
 默认输出便于阅读；Agent / 脚本查询请加 --json。
 更多设置与排障：daylog help --advanced
 `
@@ -42,28 +42,43 @@ const help = `Daylog — 自动记录今天做了什么
 const advancedHelp = `Daylog — 高级操作
 
 daylog [--data 私有目录] <命令>
-  init                       创建配置，不启动记录
-  config [选项]              查看/修改配置；config -h 显示模型配置方法
-  doctor                     检查电源、温度与屏幕权限，不截图
-  permission                 请求系统屏幕录制权限
-  windows                    列出可捕获窗口 ID（标题可能敏感）
-  run [--fixture JPEG]       前台运行；fixture 用于隔离验证
-  status [--json]             查看中文状态概览；--json 供 Agent / 脚本使用
-  stop | pause [--minutes N] | resume
-  pending [--limit N]        待分析批次与本地图片路径
-  commit --file 文件或-      导入 Agent 生成的证据化记录
-  analyze [--batch ID] [--agent 名称] [--retry] [--allow-battery]  分析一批
-  agents                     检测本机 Agent 及适配状态
-  update [--source 地址或文件] [--check] [--remember]  自更新
-  today [--date YYYY-MM-DD] [--full | --limit N] [--json]   查看日记
-  report [--period day|week|month] [--date YYYY-MM-DD] [--no-open] [--json]
-                             生成日／周／月报告；默认打开离线 HTML
-  prompt                     查看截图分析使用的提示词
-  auth set --stdin | auth delete         系统钥匙串凭据，只写不读
-  service install [--login] [--dry-run]   配置用户后台，不立即启动
-  service start | stop | uninstall
-  version
 
+日常
+  start [--login]             开始记录；--login 启用登录启动
+  stop                       停止记录
+  pause [--minutes N]         暂停 1–1440 分钟，到时自动恢复
+  resume                     恢复记录
+  today [yesterday]           查看今天或昨天；--full 查看全部
+  report [day|week|month]     打开日／周／月报告；--no-open 只生成
+  status [--verbose]          查看状态；--verbose 显示详情
+  pending [--limit N]         查看待整理记录，默认最多 10 段
+  analyze [--batch ID]        整理一段记录；--retry 立即重试
+  config [选项]              查看或修改配置
+  update [--check]            安装更新；--check 只检查
+
+排障
+  doctor                     检查系统与最近整理结果，不截图或联网
+  agents                     查看本机 Agent 安装及适配状态
+  permission                 请求系统录屏权限
+  windows                    列出可选窗口（标题可能敏感）
+
+Agent 集成
+  today | report | pending | status --json
+                             结构化查询；pending 含记录编号和图片路径
+  commit --file 文件或-       导入 Agent 整理好的记录
+  prompt                     查看整理提示词
+  auth set --stdin | delete   存进系统凭据存储（不会回显），或移除密钥
+
+服务与验证
+  init                       创建配置，不启动记录
+  run [--fixture JPEG]       前台运行；--fixture 只使用合成测试图片
+  service install [--login] [--dry-run]
+                             配置用户后台；--dry-run 只预览配置
+  service start | stop | uninstall
+                             启动、停止或移除后台服务
+  version                    查看版本
+
+每个命令可用 -h 或 daylog help <命令> 查看完整选项。
 结果命令默认显示中文，加 --json 输出结构化结果。
 service install --dry-run 默认导出平台后台配置；run 为前台进程，不输出结果文档。
 
@@ -84,7 +99,11 @@ func printHelp(text string) {
 type commandFlags struct{ *flag.FlagSet }
 
 func (f *commandFlags) Parse(args []string) error {
-	if err := f.FlagSet.Parse(args); err != nil {
+	prepared, err := f.prepare(args)
+	if err != nil {
+		return err
+	}
+	if err := f.FlagSet.Parse(prepared); err != nil {
 		return explainError(err)
 	}
 	if f.NArg() != 0 {
@@ -102,7 +121,7 @@ func flags(name string) *commandFlags {
 func execute(args []string) error {
 	err := executeCommand(args)
 	if errors.Is(err, flag.ErrHelp) {
-		printHelp(advancedHelp)
+		printHelp(subcommandHelp(args[0]))
 		return nil
 	}
 	return explainError(err)
@@ -131,20 +150,29 @@ func executeCommand(args []string) error {
 		}
 	}
 	args = filtered
+	if len(args) > 1 && args[0] == "help" && args[1] != "--advanced" {
+		if _, ok := commandUsage[args[1]]; !ok {
+			return unknownCommand(args[1])
+		}
+		printHelp(subcommandHelp(strings.Join(args[1:], " ")))
+		return nil
+	}
+	if len(args) > 1 && args[0] != "help" {
+		for _, a := range args[1:] {
+			if a == "-h" || a == "--help" {
+				if _, ok := commandUsage[args[0]]; ok {
+					printHelp(subcommandHelp(args[0]))
+					return nil
+				}
+			}
+		}
+	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		if len(args) > 1 && args[1] == "--advanced" {
 			printHelp(advancedHelp)
 		} else {
 			printHelp(help)
 		}
-		return nil
-	}
-	if args[0] == "config" && len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
-		printHelp(configHelp)
-		return nil
-	}
-	if args[0] == "report" && len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
-		printHelp(reportHelp)
 		return nil
 	}
 	if args[0] == "version" || args[0] == "--version" {
@@ -249,7 +277,7 @@ func executeCommand(args []string) error {
 		}
 		c, configErr := journal.ReadConfig(s.Root)
 		if asJSON {
-			return output(map[string]any{"version": version, "environment": env, "config_valid": configErr == nil, "policy": journal.PowerPolicy(c, env), "data_dir": s.Root, "note": "权限检查不代表真实截图、续航或安装升级已验证"})
+			return output(map[string]any{"version": version, "environment": env, "config_valid": configErr == nil, "policy": journal.PowerPolicy(c, env), "data_dir": s.Root, "model_status": doctorModels(s.Root, c), "note": "模型显示安装及最近结果，本次未截图或联网测试"})
 		}
 		writeDoctor(os.Stdout, s.Root, env, c, configErr == nil)
 		return nil
@@ -327,7 +355,7 @@ func executeCommand(args []string) error {
 			if check.Upgrade {
 				fmt.Printf("可更新至 %s，运行 daylog update 安装。\n", check.Available)
 			} else {
-				fmt.Printf("已是当前可用版本 %s。\n", version)
+				fmt.Printf("已是最新版本（%s）。\n", version)
 			}
 			return nil
 		}
@@ -414,29 +442,34 @@ func executeCommand(args []string) error {
 	case "resume", "pause":
 		f := flags(args[0])
 		asJSON := f.Bool("json", false, "JSON output")
-		minutes := f.Int("minutes", 30, "pause duration, 0 means indefinite")
+		pauseMinutes := 30
+		if args[0] == "pause" {
+			f.IntVar(&pauseMinutes, "minutes", 30, "pause duration, 1..1440 minutes")
+		}
 		if err = f.Parse(args[1:]); err != nil {
 			return err
 		}
-		if *minutes < 0 || *minutes > 1440 {
-			return errors.New("pause minutes must be 0..1440")
+		if pauseMinutes < 1 || pauseMinutes > 1440 {
+			return errors.New("暂停时长须为 1–1440 分钟；恢复记录请用 daylog resume")
 		}
-		status, err := journal.SendControl(s.Root, journal.Control{Op: args[0], Minutes: *minutes})
+		status, err := journal.SendControl(s.Root, journal.Control{Op: args[0], Minutes: pauseMinutes})
 		if err != nil {
 			return err
 		}
-		message := "已请求恢复记录。用 daylog status 查看当前状态。"
+		message := "已恢复记录。"
 		if args[0] == "pause" {
-			message = "已请求暂停记录。运行 daylog start 可继续。"
-			if *minutes > 0 {
-				message = fmt.Sprintf("已请求暂停记录 %d 分钟，之后自动恢复。", *minutes)
+			if !status.Paused || status.PauseUntil == nil {
+				return errors.New("后台尚未确认暂停，请用 daylog status 检查")
 			}
+			message = fmt.Sprintf("已暂停 %d 分钟，%s 自动恢复。提前恢复：daylog resume", pauseMinutes, status.PauseUntil.Local().Format("15:04"))
+		} else if status.Paused {
+			return errors.New("后台尚未确认恢复，请用 daylog status 检查")
 		}
 		return result(*asJSON, status, message)
 	case "pending":
 		f := flags("pending")
 		asJSON := f.Bool("json", false, "JSON output")
-		limit := f.Int("limit", 1, "batch limit")
+		limit := f.Int("limit", 10, "record limit")
 		if err = f.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -509,6 +542,14 @@ func executeCommand(args []string) error {
 		if err = f.Parse(args[1:]); err != nil {
 			return err
 		}
+		if *id != "" {
+			if _, e := s.Batch(*id); e != nil {
+				if errors.Is(e, os.ErrNotExist) || e.Error() == "invalid batch ID" {
+					return fmt.Errorf("找不到这段记录（%s）。用 daylog pending 查看可整理的记录", readable(*id))
+				}
+				return fmt.Errorf("无法读取这段记录，请用 daylog doctor 检查数据目录：%w", e)
+			}
+		}
 		c, err := journal.ReadConfig(s.Root)
 		if err != nil {
 			return err
@@ -526,7 +567,7 @@ func executeCommand(args []string) error {
 				return err
 			}
 			if len(pending) == 0 {
-				return result(*asJSON, map[string]string{"state": "no_pending_batches"}, "没有待整理的批次。")
+				return result(*asJSON, map[string]string{"state": "no_pending_batches"}, "没有待整理的记录。")
 			}
 			*id = pending[0].ID
 			if *retry {

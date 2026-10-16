@@ -120,14 +120,20 @@ func (r *Runner) serve(ctx context.Context, listener net.Listener, cancel contex
 			switch command.Op {
 			case "status":
 			case "pause":
-				r.paused = true
-				r.pauseUntil = time.Time{}
-				if command.Minutes > 0 && command.Minutes <= 1440 {
-					r.pauseUntil = time.Now().Add(time.Duration(command.Minutes) * time.Minute)
+				if command.Minutes < 1 || command.Minutes > 1440 {
+					err = errors.New("暂停时长须为 1–1440 分钟")
+					break
 				}
+				r.paused = true
+				r.pauseUntil = time.Now().Add(time.Duration(command.Minutes) * time.Minute)
+				r.status.Paused = true
+				until := r.pauseUntil.UTC()
+				r.status.PauseUntil = &until
 			case "resume":
 				r.paused = false
 				r.pauseUntil = time.Time{}
+				r.status.Paused = false
+				r.status.PauseUntil = nil
 			case "stop":
 				cancel()
 			default:
@@ -136,7 +142,7 @@ func (r *Runner) serve(ctx context.Context, listener net.Listener, cancel contex
 			r.mu.Unlock()
 		}
 		if err != nil {
-			_ = json.NewEncoder(conn).Encode(map[string]string{"error": "invalid control request"})
+			_ = json.NewEncoder(conn).Encode(map[string]string{"control_error": "控制请求无效；暂停时长须为 1–1440 分钟"})
 		} else {
 			_ = json.NewEncoder(conn).Encode(r.snapshot())
 		}
@@ -165,6 +171,9 @@ func SendControl(root string, c Control) (Status, error) {
 		return status, err
 	}
 	err = json.NewDecoder(conn).Decode(&status)
+	if err == nil && status.ControlError != "" {
+		err = errors.New(status.ControlError)
+	}
 	return status, err
 }
 
@@ -387,10 +396,14 @@ func (r *Runner) publish() {
 		r.mu.Lock()
 		r.status.Pending = len(pending)
 		r.status.FailedBatches = 0
+		r.status.InterruptedBatches = 0
 		r.status.AttentionBatches = 0
 		r.status.NextRetry = nil
 		for _, b := range pending {
-			if b.LastError != "" {
+			if PreparationState(b) == "interrupted" {
+				r.status.InterruptedBatches++
+			}
+			if PreparationState(b) == "failed" {
 				r.status.FailedBatches++
 				if b.FailureRounds > 6 {
 					r.status.AttentionBatches++
@@ -480,6 +493,9 @@ func (r *Runner) analysisLoop(ctx context.Context) {
 		} else {
 			r.status.AnalysisState = "retry_wait"
 			r.status.AnalysisError = redact(analysisErr.Error(), nil)
+			if errors.Is(analysisErr, context.Canceled) {
+				r.status.AnalysisState = "interrupted"
+			}
 			if errors.Is(analysisErr, ErrDailyBudget) {
 				r.status.AnalysisState = "budget_exhausted"
 			}

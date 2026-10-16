@@ -24,7 +24,9 @@ const configHelp = `Daylog — 配置
   daylog config
       查看中文配置概览（隐藏密钥内容）
   daylog config --json
-      导出完整 JSON 配置，可能含明文密钥
+      查看 JSON 配置（密钥打码）
+  daylog config --json --show-secrets
+      显式导出完整配置，包含密钥；仅在确需迁移或诊断时使用
   daylog config --endpoint https://api.example.com/v1/chat/completions --model MODEL --api-key KEY
       使用支持图片的 OpenAI-compatible Chat Completions API
   daylog config --api-key KEY
@@ -62,11 +64,15 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 	apiFallback := f.Bool("api-fallback", false, "try configured API after local agents fail")
 	fallbackModels := f.String("fallback-models", "", "comma-separated fallback API models")
 	asJSON := f.Bool("json", false, "JSON output after editing")
+	showSecrets := f.Bool("show-secrets", false, "explicitly include secrets in JSON export")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
 	if f.NArg() != 0 {
 		return errors.New("用法：daylog config -h")
+	}
+	if *showSecrets && !*asJSON {
+		return errors.New("完整配置导出请同时使用 --json --show-secrets")
 	}
 	changed := map[string]bool{}
 	f.Visit(func(v *flag.Flag) { changed[v.Name] = true })
@@ -168,6 +174,16 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 			}
 		}
 	}
+	if c.AI.APIKey == "<REDACTED>" {
+		if *file == "" {
+			return errors.New("不能将打码占位符保存为密钥")
+		}
+		current, err := journal.ReadConfig(s.Root)
+		if err != nil {
+			return err
+		}
+		c.AI.APIKey = current.AI.APIKey
+	}
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -193,6 +209,9 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 		}
 	}
 	if *asJSON {
+		if !*showSecrets && c.AI.APIKey != "" {
+			c.AI.APIKey = "<REDACTED>"
+		}
 		return json.NewEncoder(stdout).Encode(c)
 	}
 	if !edited {

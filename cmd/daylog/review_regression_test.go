@@ -57,7 +57,7 @@ func TestReviewInvalidArgumentsAreExplicitAndChinese(t *testing.T) {
 	}{
 		{"today_date", []string{"today", "--date", "2026-13-01"}, "日期格式应为 YYYY-MM-DD"},
 		{"report_date", []string{"report", "--date", "bad"}, "日期格式应为 YYYY-MM-DD"},
-		{"extra_today", []string{"today", "yesterday"}, "不支持的位置参数"},
+		{"extra_today", []string{"today", "unexpected"}, "不支持的位置参数"},
 		{"unknown_command", []string{"statsu"}, "status"},
 		{"unknown_flag", []string{"status", "--foo"}, "未知选项"},
 	} {
@@ -76,7 +76,7 @@ func TestReviewTodayDistinguishesUnknownAndSubMinuteDurations(t *testing.T) {
 	start := time.Date(2026, 10, 15, 10, 0, 0, 0, time.Local)
 	report := journal.Report{SchemaVersion: 2, BatchID: "20261015T100000Z", Start: start, End: start.Add(time.Hour), CreatedAt: start.Add(time.Hour), Cards: []journal.Card{
 		{Title: "单帧记录", Summary: "仅一次观察", Start: start, End: start.Add(time.Second), DurationMethod: "observation", Evidence: []string{"one"}},
-		{Title: "短活动", Summary: "有观察区间", Start: start.Add(time.Minute), End: start.Add(90 * time.Second), DurationMethod: "observation", EstimatedSeconds: 30, Evidence: []string{"two", "three"}},
+		{Title: "短活动", Summary: "有观察区间", Start: start.Add(time.Minute), End: start.Add(90 * time.Second), DurationMethod: "observation", EstimatedSeconds: 30, Spans: []journal.TimeSpan{{Start: start.Add(time.Minute), End: start.Add(90 * time.Second)}}, Evidence: []string{"two", "three"}},
 	}}
 	dir := filepath.Join(s.Root, "reports", start.Format("20060102"))
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -99,10 +99,13 @@ func TestReviewTodayDistinguishesUnknownAndSubMinuteDurations(t *testing.T) {
 func TestReviewPendingExplainsLimitsAndRetryAccounting(t *testing.T) {
 	var out bytes.Buffer
 	writePending(&out, []journal.Batch{{ID: "fixture", Attempts: 2, LastError: "hermes:canceled"}}, 3)
-	for _, want := range []string{"--limit", "调用尝试", "整轮失败", "取消"} {
+	for _, want := range []string{"--limit", "已中断", "会继续整理", "3 段"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q: %s", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "fixture") || strings.Contains(out.String(), "失败") {
+		t.Fatal("canceled work is shown as a failure or exposes an opaque ID")
 	}
 }
 
@@ -149,10 +152,17 @@ func TestReviewTodaySummarizesAndBoundsHumanOutputOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, want := range []string{"25 个活动片段", "--full", "无法估时", "采样间隔"} {
+	for _, want := range []string{"25 项活动", "--full", "主要任务"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing summary %q: %s", want, text)
 		}
+	}
+	if strings.Contains(text, "截图间隔") || strings.Contains(text, "无法估时") {
+		t.Fatal("default view repeats timing methodology")
+	}
+	data, err = commandOutput(t, append(args, "--explain")...)
+	if err != nil || !strings.Contains(string(data), "截图间隔") || !strings.Contains(string(data), "无法估时") {
+		t.Fatal("explicit method explanation is missing", err)
 	}
 	if strings.Contains(text, "\n  10:24–") {
 		t.Fatal("default human output remained unbounded")
