@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"daylog/internal/journal"
 	"daylog/internal/native"
@@ -56,7 +55,7 @@ daylog [--data 私有目录] <命令>
   analyze [--batch ID] [--agent 名称] [--retry] [--allow-battery]  分析一批
   agents                     检测本机 Agent 及适配状态
   update [--source 地址或文件] [--check] [--remember]  自更新
-  today [--date YYYY-MM-DD] [--json]      查看日记
+  today [--date YYYY-MM-DD] [--full | --limit N] [--json]   查看日记
   report [--period day|week|month] [--date YYYY-MM-DD] [--no-open] [--json]
                              生成日／周／月报告；默认打开离线 HTML
   prompt                     查看截图分析使用的提示词
@@ -81,13 +80,35 @@ func output(v any) error { return json.NewEncoder(os.Stdout).Encode(v) }
 func printHelp(text string) {
 	fmt.Print(strings.Replace(text, "Daylog —", "Daylog "+version+" —", 1))
 }
-func flags(name string) *flag.FlagSet {
+
+type commandFlags struct{ *flag.FlagSet }
+
+func (f *commandFlags) Parse(args []string) error {
+	if err := f.FlagSet.Parse(args); err != nil {
+		return explainError(err)
+	}
+	if f.NArg() != 0 {
+		return fmt.Errorf("不支持的位置参数；用 daylog help --advanced 查看 %s 的用法", f.Name())
+	}
+	return nil
+}
+
+func flags(name string) *commandFlags {
 	f := flag.NewFlagSet(name, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
-	return f
+	return &commandFlags{f}
 }
 
 func execute(args []string) error {
+	err := executeCommand(args)
+	if errors.Is(err, flag.ErrHelp) {
+		printHelp(advancedHelp)
+		return nil
+	}
+	return explainError(err)
+}
+
+func executeCommand(args []string) error {
 	if exe, err := os.Executable(); err == nil {
 		update.CleanupStaging(exe)
 	}
@@ -143,6 +164,13 @@ func execute(args []string) error {
 		}
 		fmt.Print(journal.AnalysisPrompt())
 		return nil
+	}
+	known := false
+	for _, command := range commands {
+		known = known || args[0] == command
+	}
+	if !known {
+		return unknownCommand(args[0])
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -527,61 +555,7 @@ func execute(args []string) error {
 		}
 		return result(*asJSON, map[string]string{"batch_id": *id, "state": "analyzed"}, "已完成一批活动整理。用 daylog today 或 daylog report 查看。")
 	case "today":
-		f := flags("today")
-		date := f.String("date", time.Now().Format("2006-01-02"), "local calendar day")
-		asJSON := f.Bool("json", false, "JSON output")
-		if err = f.Parse(args[1:]); err != nil {
-			return err
-		}
-		start, err := time.ParseInLocation("2006-01-02", *date, time.Local)
-		if err != nil {
-			return errors.New("date must be YYYY-MM-DD")
-		}
-		end := start.AddDate(0, 0, 1)
-		reports, err := s.Reports(start, end)
-		if err != nil {
-			return err
-		}
-		pending, err := s.Pending(0)
-		if err != nil {
-			return err
-		}
-		count := 0
-		for _, b := range pending {
-			if b.Start.Before(end) && b.End.After(start) {
-				count++
-			}
-		}
-		if *asJSON {
-			return output(map[string]any{"date": *date, "reports": reports, "pending_batches": count})
-		}
-		fmt.Printf("Daylog · %s\n\n", *date)
-		for _, r := range reports {
-			for _, card := range r.Cards {
-				fmt.Printf("  %s–%s  %s\n    %s", card.Start.Local().Format("15:04"), card.End.Local().Format("15:04"), readable(card.Title), readable(card.Summary))
-				if card.DurationMethod != "" {
-					fmt.Printf("（观察估计约 %d 分钟）", card.EstimatedSeconds/60)
-				}
-				fmt.Println()
-			}
-		}
-		if len(reports) == 0 {
-			if status, err := journal.SendControl(s.Root, journal.Control{Op: "status"}); err == nil {
-				if status.Paused {
-					fmt.Println("记录已暂停；运行 daylog start 继续。")
-				} else if status.Error != "" {
-					fmt.Println(recordingReason(status.Error))
-				} else {
-					fmt.Println("正在记录，整理完成后会显示今天的日记。")
-				}
-			} else {
-				fmt.Println("还没有日记。运行 daylog start 开始记录。")
-			}
-		}
-		if count > 0 {
-			fmt.Printf("\n还有 %d 段活动尚未整理，日记暂不完整。\n", count)
-		}
-		return nil
+		return todayCommand(s, args[1:])
 	case "auth":
 		if len(args) < 2 {
 			return errors.New("用法：daylog auth set --stdin 或 daylog auth delete")
@@ -695,7 +669,7 @@ func execute(args []string) error {
 		}
 		return errors.New("未知服务操作；可用 install、start、stop、uninstall")
 	}
-	return errors.New("unknown command; use daylog help")
+	return unknownCommand(args[0])
 }
 
 func readInput(path string) (io.Reader, func(), error) {

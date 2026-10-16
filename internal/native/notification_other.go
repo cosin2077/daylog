@@ -4,4 +4,6 @@ package native
 
 import "errors"
 
-func NotifyAnalysisFailure() error { return errors.New("Windows notification unavailable") }
+func NotifyAnalysisFailure(message string) error {
+	return errors.New("Windows notification unavailable")
+}

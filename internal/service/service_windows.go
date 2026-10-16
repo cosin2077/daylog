@@ -104,7 +104,7 @@ func Start(home, root string) error {
 	if c.Root != root || !filepath.IsAbs(c.Executable) {
 		return errors.New("invalid background configuration")
 	}
-	log, e := os.OpenFile(filepath.Join(root, "daemon.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	log, e := openDaemonLog(root)
 	if e != nil {
 		return e
 	}

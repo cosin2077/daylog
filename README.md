@@ -18,7 +18,9 @@ daylog stop     # 停止记录
 
 `daylog status` 查看中文状态概览：运行时长、最近截图、采集/跳过次数、待整理批次和截图磁盘占用。时间按本机时区显示；采集计数属于本次启动，待整理和占用包含历史。所有结果命令默认显示便于阅读的中文；Agent 或脚本解析结果时统一加 `--json`，例如 `status --json`、`pending --json`、`agents --json`、`version --json`。`config` 默认显示隐藏密钥的配置概览，`config --json` 导出完整配置（可能含明文密钥）。
 
-`daylog`、`daylog -h`、`daylog --help` 都显示帮助，且不会初始化数据或启动记录。`daylog today` 查看日记。首批日记通常约 15 分钟后生成；它反映屏幕活动，不等于精确工时。
+`daylog`、`daylog -h`、`daylog --help` 都显示帮助，且不会初始化数据或启动记录。`daylog today` 先显示观察估计、主要任务和缺口说明，再列出最多 20 个活动片段；`--full` 查看全部，`--limit N` 调整条数。`today --json` 始终导出完整记录。单帧活动显示“时长未估”，不足一分钟的有效估计显示秒数。首批日记通常约 15 分钟后生成；它反映屏幕活动，不等于精确工时。
+
+后台停止时，`daylog status` 正常返回并显示“已停止”；`status --json` 返回 `running:false`、`state:"stopped"` 和可读取的历史整理信息。控制连接异常且运行锁仍被持有时返回错误及 `state:"unreachable"`、`running:null`，不误报为停止。
 
 ## 安装与更新
 
@@ -181,7 +183,7 @@ Go 后台在 macOS 调用 ScreenCaptureKit，在 Windows 调用 GDI；采集无�
 
 不记录 Authorization 请求头和图片 Base64，过滤已知凭据及常见密钥格式。日志仍可能含工作内容，应按私有数据对待；目录 0700、文件 0600，默认保留 7 天、总上限 32 MiB。单个响应最多记录 128 KiB、stderr 最多 8 KiB，截断会标记。可在 config.json 的 `diagnostics` 中设置 `enabled`、`retention_days`、`max_bytes`。
 
-本机 Agent 默认单次上限 180 秒，`agent.effort` 默认为 `low`，可改成 `inherit` 使用 Agent 原配置，或 `medium` / `high`。这些设置只作用于 Daylog 的子进程；Codex 插件/hooks/记忆加载被关闭，Claude 使用保留认证/模型选择的 safe mode。不会修改全局 Agent 配置。老配置中明确保存的 90 秒仍保留，可自行调整 `agent.timeout_seconds`。
+本机 Agent 默认单次上限 180 秒，可用 `daylog config --agent-timeout 240` 修改（10–600 秒），不改变模型或回退顺序。超时期间观察到的上游重试会单独标记；延长时限不能保证网络或模型故障恢复。`agent.effort` 默认为 `low`，可改成 `inherit` 使用 Agent 原配置，或 `medium` / `high`。这些设置只作用于 Daylog 的子进程；Codex 插件/hooks/记忆加载被关闭，Claude 使用保留认证/模型选择的 safe mode。不会修改全局 Agent 配置。老配置中明确保存的 90 秒仍保留。
 
 `daylog status` 显示分析状态、失败批次数、最近成功和下次重试。需要立即恢复某批时：
 

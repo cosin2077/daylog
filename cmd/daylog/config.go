@@ -35,6 +35,8 @@ const configHelp = `Daylog — 配置
       改用指定环境变量中的密钥
   daylog config --agent auto
       切回本机 Agent；可用 --agent claude,hermes 指定优先顺序
+  daylog config --agent-timeout 240
+      设置单次 Agent 调用时限（10–600 秒，默认 180 秒）；不改变模型或顺序
   daylog config --api-fallback --fallback-models MODEL2
       本机 Agent 全部失败后才使用已配置 API，主模型失败再试备用模型
 
@@ -56,6 +58,7 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 	keyEnv := f.String("key-env", "", "API key environment variable name")
 	keyStdin := f.Bool("api-key-stdin", false, "read API key from stdin into Keychain")
 	agent := f.String("agent", "", "auto or comma-separated agent order")
+	agentTimeout := f.Int("agent-timeout", 0, "per-agent timeout in seconds, 10..600")
 	apiFallback := f.Bool("api-fallback", false, "try configured API after local agents fail")
 	fallbackModels := f.String("fallback-models", "", "comma-separated fallback API models")
 	asJSON := f.Bool("json", false, "JSON output after editing")
@@ -106,6 +109,12 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 	}
 	if changed["notifications"] {
 		c.Diagnostics.FailureNotifications = *notifications
+	}
+	if changed["agent-timeout"] {
+		if *agentTimeout < 10 || *agentTimeout > 600 {
+			return errors.New("Agent 调用时限必须为 10–600 秒")
+		}
+		c.Agent.TimeoutSeconds = *agentTimeout
 	}
 	if changed["profile"] {
 		if err := c.ApplyProfile(*profile); err != nil {
@@ -177,7 +186,7 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 		c.AI.APIKey = ""
 		c.AI.KeyEnv = ""
 	}
-	edited := changed["notifications"] || changed["api-fallback"] || changed["fallback-models"] || changed["profile"] || *file != "" || customAPI || changed["key-env"] || changed["agent"] || changed["api-key"] || *keyStdin
+	edited := changed["notifications"] || changed["agent-timeout"] || changed["api-fallback"] || changed["fallback-models"] || changed["profile"] || *file != "" || customAPI || changed["key-env"] || changed["agent"] || changed["api-key"] || *keyStdin
 	if edited {
 		if err := journal.WriteJSON(filepath.Join(s.Root, "config.json"), c); err != nil {
 			return err

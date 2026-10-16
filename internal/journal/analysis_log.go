@@ -12,22 +12,23 @@ import (
 )
 
 type AnalysisLog struct {
-	At         time.Time `json:"at"`
-	Event      string    `json:"event"`
-	RequestID  string    `json:"request_id"`
-	BatchID    string    `json:"batch_id"`
-	Source     string    `json:"source"`
-	Model      string    `json:"model,omitempty"`
-	Attempt    int       `json:"attempt"`
-	ElapsedMS  int64     `json:"elapsed_ms,omitempty"`
-	Payload    any       `json:"payload,omitempty"`
-	Response   string    `json:"response,omitempty"`
-	Stderr     string    `json:"stderr,omitempty"`
-	ErrorKind  string    `json:"error_kind,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	HTTPStatus int       `json:"http_status,omitempty"`
-	ExitCode   *int      `json:"exit_code,omitempty"`
-	Truncated  bool      `json:"truncated,omitempty"`
+	At              time.Time `json:"at"`
+	Event           string    `json:"event"`
+	RequestID       string    `json:"request_id"`
+	BatchID         string    `json:"batch_id"`
+	Source          string    `json:"source"`
+	Model           string    `json:"model,omitempty"`
+	Attempt         int       `json:"attempt"`
+	ElapsedMS       int64     `json:"elapsed_ms,omitempty"`
+	Payload         any       `json:"payload,omitempty"`
+	Response        string    `json:"response,omitempty"`
+	Stderr          string    `json:"stderr,omitempty"`
+	ErrorKind       string    `json:"error_kind,omitempty"`
+	Error           string    `json:"error,omitempty"`
+	HTTPStatus      int       `json:"http_status,omitempty"`
+	ExitCode        *int      `json:"exit_code,omitempty"`
+	UpstreamRetries int       `json:"upstream_retries,omitempty"`
+	Truncated       bool      `json:"truncated,omitempty"`
 }
 
 var credentialText = regexp.MustCompile(`(?i)(authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|token)["']?\s*[:=]\s*["']?[^\s,"'}]+`)

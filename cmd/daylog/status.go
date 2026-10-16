@@ -9,7 +9,33 @@ import (
 	"time"
 
 	"daylog/internal/journal"
+	"daylog/internal/platform"
 )
+
+type statusResult struct {
+	journal.Status
+	Running bool   `json:"running"`
+	State   string `json:"state"`
+}
+
+func recorderStopped(root string) (bool, error) {
+	f, err := os.OpenFile(filepath.Join(root, "daemon.lock"), os.O_RDWR, 0600)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	err = platform.TryLock(f)
+	if errors.Is(err, platform.ErrBusy) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, platform.Unlock(f)
+}
 
 func statusCommand(s *journal.Store, args []string) error {
 	f := flags("status")
@@ -21,11 +47,35 @@ func statusCommand(s *journal.Store, args []string) error {
 		return errors.New("用法：daylog status [--json]")
 	}
 	status, err := journal.SendControl(s.Root, journal.Control{Op: "status"})
+	running := err == nil
 	if err != nil {
-		if *asJSON {
+		stopped, checkErr := recorderStopped(s.Root)
+		if checkErr != nil {
+			return checkErr
+		}
+		if !stopped {
+			err := errors.New("后台仍持有运行锁，但控制连接失败；请稍后重试 daylog status，持续失败时运行 daylog doctor")
+			if *asJSON {
+				if outputErr := output(map[string]any{"running": nil, "state": "unreachable", "error": err.Error()}); outputErr != nil {
+					return outputErr
+				}
+			}
 			return err
 		}
-		return errors.New("未连接到后台；尚未启动时运行 daylog start，若已启动可用 daylog doctor 检查")
+		pending, pendingErr := s.Pending(0)
+		if pendingErr != nil {
+			return pendingErr
+		}
+		status.Pending = len(pending)
+		for _, batch := range pending {
+			if batch.LastError != "" {
+				status.FailedBatches++
+			}
+		}
+		status.StorageBytes, err = s.RawBytes()
+		if err != nil {
+			return err
+		}
 	}
 	// Restore recent success information even immediately after a daemon restart.
 	now := time.Now()
@@ -44,7 +94,21 @@ func statusCommand(s *journal.Store, args []string) error {
 		status.ReportHasNewAnalysis = status.LastAnalysis != nil && status.LastAnalysis.After(at)
 	}
 	if *asJSON {
-		return output(status)
+		state := "stopped"
+		if running {
+			state = "running"
+			if status.Paused {
+				state = "paused"
+			}
+		}
+		return output(statusResult{Status: status, Running: running, State: state})
+	}
+	if !running {
+		fmt.Fprintln(os.Stdout, "○ Daylog · 已停止")
+		fmt.Fprintln(os.Stdout, "  最近整理  "+statusTime(status.LastAnalysis, now))
+		fmt.Fprintf(os.Stdout, "  待整理    %d 批\n  截图占用  %s（磁盘）\n", status.Pending, statusBytes(status.StorageBytes))
+		fmt.Fprintln(os.Stdout, "  再次开始  daylog start")
+		return nil
 	}
 	writeStatus(os.Stdout, status, time.Now())
 	return nil

@@ -248,3 +248,19 @@
 - 本轮下载该预检产物，逐项核对 checksums.txt、三个平台包与 manifest 摘要、Windows ZIP 四个精确条目、x64 PE 架构、固定证书 RSA 签名及版本绑定。轻量 skill 含 Windows 安装器与平台说明且不带二进制。
 - 本机 macOS 再次执行 go test -race ./...、go vet ./... 及 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./... 均成功；保留既有 LC_DYSYMTAB 链接告警记录，不将其当作测试失败。skill quick_validate 和 git diff --check 通过。同步修正 README、发布/签名说明和 0.7.0 Release 草稿文案中的旧平台及签名描述。
 - 验证边界：没有 Windows 10/11 真实用户桌面、真实 Agent 登录/识图、多显示器、混合 DPI、HDR/DRM、RDP 或续航实测。Windows 包独立 RSA 签名不是 Authenticode，不提供 SmartScreen 信誉。公开 Latest 仍为 0.6.1，没有 Windows 附件；本轮完成实现与 CI，未公开 0.7.0、未替换本机正在使用的 0.6.1。
+
+## 2026-10-16 CLI 体验评测修复（源码，未发布）
+
+- 对照 0.6.1 体验评测核验 b485357 源码，逐条判断见 docs/cli-review-findings.md。修复未知/短时长展示、日记摘要与完整导出、停止/连接异常状态 JSON、中文参数错误和建议、doctor 原生查询失败指引、pending 调用/整轮失败计数说明，以及以后后台日志 0600 权限。
+- Agent 测试使用假的 Claude/Hermes 进程和合成图片，覆盖 UI/重试/警告/文本增量与最终结果的区分、空结果拒绝、非零退出的终态错误、上游重试期间超时、通知原因白名单与子进程限时。单次时限原已可配置，新增 config --agent-timeout 入口；不改默认值、模型或回退顺序，不承诺外部模型服务超时已解决。
+- go test -race -json -count=1 -timeout=60s ./cmd/daylog ./internal/journal ./internal/service：排除当前沙箱无法 TCP bind 的 4 个既有 HTTP 夹具后，83 个顶层测试、含子测试 112 项通过。排除项为 TestConfiguredFallbackCountsOneRoundAndSharesBudget、TestAPICompleteResponseAndIncompleteRejection、TestAPIRedirectDoesNotForwardScreenshots、TestV2APIInputAndUsage。
+- go vet ./...、GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...、本机临时 CLI 构建、git diff --check 通过。临时 CLI 用独立 --data 实际验证停止状态退出码 0/JSON、无效日期/位置参数/未知选项/命令的中文 stderr 与退出码 1、时限配置持久化。完整 JSON 的测试输出改为并发读取管道，避免大日记使夹具阻塞。
+- 完整 go test ./... 在已有 httptest 本地监听处触发 bind: operation not permitted，完整运行已中止，不能称全量通过。未做真实原生硬件查询、LaunchServices/TCC、Windows 运行或真实模型 E2E；原生启动错误通过注入回调验证，没有触发系统授权。
+- 不发布、不推送、不改正式安装或用户 ~/.daylog 数据；测试、配置写入、图片和报告全部位于隔离临时目录。Hermes none 警告、按标题合并、自动回退报告日期及用户数据杂项的取舍见逐条说明。
+
+### 0.7.0 发布前完整复验
+
+- 在无限制执行环境将已核验补丁应用到主仓库。go test -race -json -count=1 -timeout=120s ./... 全部成功：95 个顶层测试、含子测试 138 项，没有跳过此前受限的 4 个 HTTP/TCP 夹具。原生 macOS 元数据解码和更新器测试也成功。
+- go vet ./... 与 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./... 均通过。0.7.0 开发构建生成 macOS arm64 / amd64 与 Windows x64；固定发布者 pin 配置、skill quick_validate、git diff --check 均通过。
+- scripts/verify-runtime.py --skip-native-check 和 scripts/verify-installer.py 均成功，覆盖隔离采集/单实例/暂停恢复停止、本地记录与范围报告、开发更新、技能安装，以及真实本机 HTTP 下载、平台选择、重复安装、摘要/路径/链接/发布者拒绝。夹具和服务均清理；这是合成数据验证，不代表真实模型或 Windows 用户桌面 E2E。
+- 本机升级前为 0.6.1，后台停止。配置与已安装二进制摘要、签名 requirement 已记录，更新源为公开 Latest。一次 CLI doctor 查询失败；随后通过正式 App 身份的直接 LaunchServices 查询（临时目录及实际数据目录）均成功，录屏权限 true、配置摘要未变。此差异仍不作为原生查询故障根因已修复的证据。

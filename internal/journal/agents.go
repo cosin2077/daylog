@@ -1,7 +1,6 @@
 package journal
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"daylog/internal/platform"
@@ -87,6 +86,7 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 type AgentTrace struct {
 	Response, Stderr, Kind string
 	ExitCode               *int
+	UpstreamRetries        int
 	secrets                []string
 }
 type tailBuffer struct {
@@ -202,6 +202,11 @@ func runAgent(ctx context.Context, name, path, dir string, b Batch, images []str
 	callErr := platform.RunProcess(cmd)
 	trace.Stderr = stderr.String()
 	trace.Response = string(stdout.Bytes())
+	result, resultKind, retries := "", "", 0
+	if name != "codex" {
+		result, resultKind, retries = agentEvents(name, stdout.Bytes())
+	}
+	trace.UpstreamRetries = retries
 	if callErr != nil {
 		trace.Kind = "cli_exit"
 		var exit *exec.ExitError
@@ -209,12 +214,17 @@ func runAgent(ctx context.Context, name, path, dir string, b Batch, images []str
 			code := exit.ExitCode()
 			trace.ExitCode = &code
 		}
-		if ctx.Err() == context.DeadlineExceeded {
+		if stdout.overflow {
+			trace.Kind = "output_limit"
+		} else if ctx.Err() == context.DeadlineExceeded {
 			trace.Kind = "timeout"
+			if retries > 0 {
+				trace.Kind = "upstream_timeout"
+			}
 		} else if ctx.Err() != nil {
 			trace.Kind = "canceled"
-		} else if stdout.overflow {
-			trace.Kind = "output_limit"
+		} else if resultKind == "agent_error" {
+			trace.Kind = "agent_error"
 		}
 		return trace, fmt.Errorf("%s: %s", name, trace.Kind)
 	}
@@ -231,41 +241,12 @@ func runAgent(ctx context.Context, name, path, dir string, b Batch, images []str
 		trace.Kind = ""
 		return trace, nil
 	}
-	scanner := bufio.NewScanner(bytes.NewReader(stdout.Bytes()))
-	scanner.Buffer(make([]byte, 4096), 1<<20)
-	for scanner.Scan() {
-		var event struct {
-			Structured json.RawMessage `json:"structured_output"`
-			Type       string          `json:"type"`
-			Result     string          `json:"result"`
-			Text       string          `json:"text"`
-			IsError    bool            `json:"is_error"`
-			ExitCode   int             `json:"exit_code"`
-		}
-		if json.Unmarshal(scanner.Bytes(), &event) != nil {
-			continue
-		}
-		if event.Type == "result" {
-			if event.IsError || event.ExitCode != 0 {
-				trace.Kind = "agent_error"
-				return trace, errors.New("agent reported failure")
-			}
-			if name == "claude" {
-				if len(event.Structured) > 0 && string(event.Structured) != "null" {
-					trace.Response = string(event.Structured)
-					trace.Kind = ""
-					return trace, nil
-				}
-				trace.Response = event.Result
-				trace.Kind = ""
-				return trace, nil
-			}
-			trace.Response = event.Text
-			trace.Kind = ""
-			return trace, nil
-		}
+	trace.Kind = resultKind
+	if resultKind != "" {
+		return trace, fmt.Errorf("%s: %s", name, resultKind)
 	}
-	return trace, errors.New("agent returned no complete result")
+	trace.Response = result
+	return trace, nil
 }
 
 func (s *Store) analyzeAgent(ctx context.Context, id string, c Config, selected string) error {
@@ -345,6 +326,7 @@ func (s *Store) analyzeAgent(ctx context.Context, id string, c Config, selected 
 		event.Stderr = trace.Stderr
 		event.ExitCode = trace.ExitCode
 		event.ErrorKind = trace.Kind
+		event.UpstreamRetries = trace.UpstreamRetries
 		if callErr == nil {
 			if _, parseErr := parseAnalysis(b, []byte(trace.Response)); parseErr != nil {
 				callErr = parseErr

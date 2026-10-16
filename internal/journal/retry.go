@@ -44,7 +44,7 @@ func retryDelay(rounds int) time.Duration {
 }
 
 func (s *Store) FinishFailure(id, reason string) error {
-	return s.finishFailure(id, reason, notifyAnalysisFailure)
+	return s.finishFailure(id, reason, func() error { return notifyAnalysisFailure(reason) })
 }
 
 func (s *Store) finishFailure(id, reason string, notify func() error) error {
@@ -68,7 +68,7 @@ func (s *Store) finishFailure(id, reason string, notify func() error) error {
 				fmt.Fprintln(os.Stderr, "Daylog: 系统通知未提交；请用 daylog status / report 查看持续失败的批次")
 			}
 		}
-		fmt.Fprintf(os.Stderr, "Daylog: 分析失败 · %s · 第 %d 轮 · 下次 %s · 重试：daylog analyze --batch %s --retry\n", b.ID, b.FailureRounds, next.Local().Format("01-02 15:04"), b.ID)
+		fmt.Fprintf(os.Stderr, "Daylog: 分析失败 · %s · %s · 第 %d 轮 · 下次 %s · 重试：daylog analyze --batch %s --retry\n", b.ID, FailureReason(reason), b.FailureRounds, next.Local().Format("01-02 15:04"), b.ID)
 		return WriteJSON(filepath.Join(s.Root, "batches", id+".json"), b)
 	})
 }
@@ -117,22 +117,29 @@ func nextAnalysis(pending []Batch, now time.Time) (Batch, bool) {
 
 // A fixed notification contains no screenshot content, credentials or model
 // output. macOS notification preferences control whether a banner is shown.
-func notifyAnalysisFailure() error {
+func failureNotification(reason string) string {
+	return "活动分析连续重试失败超过 5 次。最近原因：" + FailureReason(reason) + "。截图已保留；运行 daylog status 或 daylog report 查看。"
+}
+
+func notifyAnalysisFailure(reason string) error {
+	message := failureNotification(reason)
 	if runtime.GOOS == "windows" {
-		return native.NotifyAnalysisFailure()
+		return native.NotifyAnalysisFailure(message)
 	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("system notification unsupported")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "/usr/bin/osascript", "-e", `display notification "活动分析连续重试失败超过 5 次。截图已保留，将继续退避重试；运行 daylog status 或 daylog report 查看。" with title "Daylog · 分析需要关注"`).Run()
+	return exec.CommandContext(ctx, "/usr/bin/osascript", "-e", fmt.Sprintf(`display notification %q with title "Daylog · 分析需要关注"`, message)).Run()
 }
 
 // Safe, stable descriptions for exported reports; raw transport text stays in
 // private diagnostics rather than being embedded into the HTML.
 func FailureReason(reason string) string {
 	switch {
+	case strings.Contains(reason, "upstream_timeout"):
+		return "模型调用超时（曾发生上游重试）"
 	case strings.Contains(reason, "timeout"):
 		return "模型等待超时"
 	case strings.Contains(reason, "canceled"):

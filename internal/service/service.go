@@ -51,6 +51,13 @@ func Preview(executable, root string, login bool) []byte {
 }
 
 func Install(home, root, executable string, login bool) (string, error) {
+	log, err := openDaemonLog(root)
+	if err != nil {
+		return "", err
+	}
+	if err = log.Close(); err != nil {
+		return "", err
+	}
 	path := Path(home, root)
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return "", err

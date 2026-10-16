@@ -197,12 +197,15 @@ func writePending(w io.Writer, batches []journal.Batch, total int) {
 		return
 	}
 	fmt.Fprintf(w, "Daylog · 待整理 %d 批（显示 %d 批）\n", total, len(batches))
+	if len(batches) < total {
+		fmt.Fprintf(w, "查看全部：daylog pending --limit %d\n", total)
+	}
 	for _, b := range batches {
 		fmt.Fprintf(w, "\n  %s — %s\n", b.Start.Local().Format("2006-01-02 15:04"), b.End.Local().Format("2006-01-02 15:04"))
-		fmt.Fprintf(w, "  %d 张关键帧 · 已尝试 %d 次\n  批次：%s\n", len(b.Frames), b.Attempts, b.ID)
+		fmt.Fprintf(w, "  %d 张关键帧 · 调用尝试 %d 次\n  批次：%s\n", len(b.Frames), b.Attempts, b.ID)
 		if b.LastError != "" {
 			fmt.Fprintln(w, "  状态："+analysisReason(b.LastError))
-			fmt.Fprintf(w, "  失败轮次：%d · 手动重试：daylog analyze --batch %s --retry\n", b.FailureRounds, b.ID)
+			fmt.Fprintf(w, "  整轮失败：%d 次（全部候选失败才计一轮，取消不计）\n  手动重试：daylog analyze --batch %s --retry\n", b.FailureRounds, b.ID)
 		}
 		if next := journal.RetryTime(b); next.After(time.Now()) {
 			fmt.Fprintln(w, "  下次可重试："+next.Local().Format("15:04:05"))
@@ -212,8 +215,23 @@ func writePending(w io.Writer, batches []journal.Batch, total int) {
 }
 
 func analysisReason(reason string) string {
+	if strings.Contains(reason, "upstream_timeout") {
+		return "模型调用超时，期间发生过上游重试；请检查 Agent 的网络和模型配置，或用 daylog config --agent-timeout 调整时限"
+	}
 	if strings.Contains(reason, "timeout") {
-		return "模型调用超时；错误详情已记录到 logs/llm，失败批次会退避重试"
+		return "模型调用超时；请检查 Agent 的网络和模型状态，详情见 logs/llm；可用 daylog config --agent-timeout 调整时限"
+	}
+	if strings.Contains(reason, "canceled") {
+		return "调用已取消；本次取消不计整轮失败，截图仍保留"
+	}
+	if strings.Contains(reason, "missing_result") {
+		return "Agent 没有返回完整结果；请检查其非交互调用和模型状态，详情见 logs/llm"
+	}
+	if strings.Contains(reason, "agent_error") {
+		return "Agent 返回失败结果；请检查登录、网络及模型状态，详情见 logs/llm"
+	}
+	if strings.Contains(reason, "output_limit") {
+		return "Agent 输出超过大小限制，未保存为日记；详情见 logs/llm"
 	}
 	if strings.Contains(reason, "cli_exit") {
 		return "Agent 命令未正常退出；可查看 logs/llm 中的脱敏 stderr"
@@ -245,4 +263,14 @@ func analysisReason(reason string) string {
 		return readable(strings.TrimPrefix(reason, "agent_failed:")) + " 分析未成功，请检查登录状态和模型的图片能力"
 	}
 	return "整理暂未完成，可用 daylog doctor 检查运行环境"
+}
+
+func observationDuration(seconds int64) string {
+	if seconds <= 0 {
+		return "观察已记录，时长未估"
+	}
+	if seconds < 60 {
+		return fmt.Sprintf("观察估计约 %d 秒", seconds)
+	}
+	return fmt.Sprintf("观察估计约 %d 分钟", seconds/60)
 }

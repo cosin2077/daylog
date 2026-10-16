@@ -26,7 +26,7 @@ func (s *Store) analysisRound(ctx context.Context, id string, notifications bool
 		if b, readErr := s.Batch(id); readErr == nil && b.LastError != "" {
 			var notify func() error
 			if notifications {
-				notify = notifyAnalysisFailure
+				notify = func() error { return notifyAnalysisFailure(b.LastError) }
 			}
 			if finishErr := s.finishFailure(id, b.LastError, notify); finishErr != nil {
 				return finishErr

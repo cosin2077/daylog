@@ -12,7 +12,7 @@ import (
 
 var notificationID atomic.Uint32
 
-func NotifyAnalysisFailure() error {
+func NotifyAnalysisFailure(message string) error {
 	startPowerObserver()
 	select {
 	case <-powerReady:
@@ -43,7 +43,7 @@ func NotifyAnalysisFailure() error {
 	copy(data.Tip[:], tip)
 	title, _ := windows.UTF16FromString("Daylog · 分析需要关注")
 	copy(data.Title[:], title)
-	info, _ := windows.UTF16FromString("活动分析连续重试失败超过 5 次。截图已保留，将继续退避重试；运行 daylog status 或 daylog report 查看。")
+	info, _ := windows.UTF16FromString(message)
 	copy(data.Info[:], info)
 	notify := windows.NewLazySystemDLL("shell32.dll").NewProc("Shell_NotifyIconW")
 	if ok, _, _ := notify.Call(0, uintptr(unsafe.Pointer(&data))); ok == 0 {

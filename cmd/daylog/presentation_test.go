@@ -22,15 +22,22 @@ func commandOutput(t *testing.T, args ...string) ([]byte, error) {
 	previous := os.Stdout
 	os.Stdout = w
 	defer func() { os.Stdout = previous; r.Close(); w.Close() }()
-	// Commands under test have bounded output smaller than the pipe capacity.
+	// Complete JSON diaries can exceed the OS pipe capacity. Drain concurrently
+	// so the harness does not deadlock before execute returns.
+	type captured struct {
+		data []byte
+		err  error
+	}
+	done := make(chan captured, 1)
+	go func() { data, err := io.ReadAll(r); done <- captured{data, err} }()
 	err = execute(args)
 	w.Close()
 	os.Stdout = previous
-	data, readErr := io.ReadAll(r)
-	if readErr != nil {
-		t.Fatal(readErr)
+	result := <-done
+	if result.err != nil {
+		t.Fatal(result.err)
 	}
-	return data, err
+	return result.data, err
 }
 
 func TestQueryCommandsRequireExplicitJSON(t *testing.T) {
