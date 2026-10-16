@@ -2,7 +2,7 @@
 
 <img src="assets/icon/daylog.png" width="96" height="96" alt="Daylog：日光与日志" />
 
-自动记录今天做了什么。支持 macOS 14+；Windows 10/11 x64 适配从 0.7.0 起提供。后台采样截图，自动调用已有 Agent 的视觉模型整理成工作日记。
+自动记录今天做了什么。支持 macOS 14+；Windows 10 1809+ / Windows 11 x64 适配从 0.7.0 起提供。后台采样截图，自动调用已有 Agent 的视觉模型整理成工作日记。Windows 的支持范围和验证边界见 [平台说明](skills/daylog/references/windows.md)。
 
 ## 日常只需三个命令
 
@@ -12,7 +12,7 @@ daylog today    # 查看今天
 daylog stop     # 停止记录
 ```
 
-`start` 自动创建配置、准备后台服务、检查录屏权限并开始工作。首次按 macOS 提示给 Daylog 授权，命令会等待并自动继续；不需要手动执行初始化或安装服务。重复执行不会重复启动，暂停后执行则恢复。
+`start` 自动创建配置、准备用户后台并检查采集条件。macOS 首次按系统提示给 Daylog 录屏授权，命令会等待并自动继续；Windows 在当前用户桌面运行，锁屏或安全桌面时暂停。不需要手动执行初始化或安装服务。重复执行不会重复启动，暂停后执行则恢复。
 
 默认使用本机 Claude → Codex → Hermes 的已有模型配置。无需再填 API Key；模型需要支持图片，分析可能使用该 Agent 的云端服务。没有兼容 Agent 或分析失败时，截图保留在本地等待处理。Grok / Antigravity 目前仅检测。
 
@@ -75,7 +75,7 @@ daylog config --endpoint https://api.example.com/v1/chat/completions --model vis
 
 需要支持图片的 OpenAI-compatible Chat Completions 接口；URL 是完整的请求地址，不只是域名。启用后优先使用该 API。
 
-`--api-key` 会把密钥明文写入 `~/.daylog/config.json` 的 `ai.api_key`，也可以直接编辑这个字段。读取优先级为：JSON 明文密钥 → 指定环境变量 → 系统钥匙串。环境变量和 `--api-key-stdin` 钥匙串方式均为可选。
+`--api-key` 会把密钥明文写入 `~/.daylog/config.json` 的 `ai.api_key`，也可以直接编辑这个字段。读取优先级为：JSON 明文密钥 → 指定环境变量 → 系统凭据存储（macOS 钥匙串 / Windows Credential Manager）。环境变量和 `--api-key-stdin` 安全存储方式均为可选。
 
 修改后若正在记录，执行 `daylog stop`、`daylog start` 生效。`daylog config --agent auto` 切回本机 Agent；`daylog config -h` 查看完整方法。
 
@@ -173,7 +173,7 @@ daylog config --profile detailed  # 30 秒采样，10 分钟分批，目标 6 / 
 
 电池采样分别为 120 / 180 / 120 秒；档位不启用电池分析，也不修改模型、密钥、屏蔽应用和窗口设置。高级配置包括 `target_images_per_batch`、`max_images_per_batch`、`max_images_per_day`、`max_observation_gap_seconds`（连续估算最大间隔，默认 300 秒，相邻采样还取实际采样间隔的两倍作为更严格上限；插值两端关键帧也不能超过此配置上限）。`heartbeat_seconds` 为旧配置保留；v2 使用真实重复观察替代定时保存重复图。
 
-Go 后台和少量原生代码调用 ScreenCaptureKit，无 WebView、Node 或第三方 Go 依赖。旧版已有实机后台内存短样本约 27–30 MiB（不代表新版测量）；实际电池续航尚未测量。小网格可能漏掉细微文字修改，长时间无输入的阅读也可能被当作空闲。
+Go 后台在 macOS 调用 ScreenCaptureKit，在 Windows 调用 GDI；采集无需 WebView 或 Node。Windows 适配使用 `go-winio` 和 `x/sys`，许可随包分发。旧版 macOS 已有实机后台内存短样本约 27–30 MiB（不代表新版或 Windows 测量）；实际电池续航尚未测量。小网格可能漏掉细微文字修改，长时间无输入的阅读也可能被当作空闲。
 
 ## 分析日志与失败恢复
 
@@ -200,7 +200,7 @@ daylog analyze --batch 批次ID --retry
 python3 scripts/install-skills.py --agent all
 ```
 
-脚本复制 skill 的说明和安装器，源码 skill 无需附带二进制；复制 skill 不会直接运行 App。Agent 随后运行安装器，自动下载适配 Mac 的 arm64 或 amd64 包，无需现场编译。
+脚本复制 skill 的说明和安装器，源码 skill 无需附带二进制；复制 skill 不会启动记录。Agent 随后运行对应平台安装器，自动下载 macOS arm64 / amd64 或 Windows x64 包，无需现场编译；正式 Release 尚无该平台附件时会明确报错。
 
 之后直接说“用 Daylog 开始记录”“看看今天做了什么”“停止记录”。Agent 使用同一套简单入口；用户无需理解截图批次或服务管理。
 
@@ -223,7 +223,7 @@ python3 scripts/install-skills.py --agent all
 ## GitHub 自动构建与发布
 
 - PR 和 `main` 推送：在 macOS 15 的 arm64 / Intel runner 上运行测试、构建和隔离安装验证；Windows 2022 runner 运行 Go 测试、PowerShell 5.1/7 安装与后台/自更新验证。
-- 推送 `v0.4.0` 这样的数字版本标签：构建双架构包，生成版本固定的更新清单和轻量 skill 包，上传 Actions artifact 并创建 **Release 草稿**。
+- 推送 `v0.7.0` 这样的数字版本标签：构建 macOS 双架构包和 Windows x64 包，生成版本固定的更新清单和轻量 skill 包，上传 Actions artifact 并创建 **Release 草稿**；另在 Windows runner 验证正式签名包的安装与自更新。
 - 也可手动运行 “Build release” workflow，传入已经存在的标签。重跑只替换同标签草稿附件；已发布版本拒绝覆盖。
 - 维护者验证后将草稿发布为正式 Release，并设为 Latest，Agent 默认安装及 `daylog update` 才会使用它。CI 不会自动开始用户录屏。
 
