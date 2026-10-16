@@ -8,7 +8,7 @@ var commandUsage = map[string]string{
 	"report":     reportHelp,
 	"config":     configHelp,
 	"pending":    "daylog pending [--limit N] [--json]\n\n查看待整理的记录，默认最多显示 10 段。--json 包含记录编号和截图路径，供 Agent 使用。",
-	"analyze":    "daylog analyze [--batch ID] [--retry] [--agent NAME] [--allow-battery] [--json]\n\n整理一段记录。先用 daylog pending 查看待整理内容；--retry 立即重试，不重置额度。",
+	"analyze":    "daylog analyze [ID | --batch ID] [--retry] [--agent NAME] [--allow-battery] [--json]\n\n整理一段记录。先用 daylog pending 查看待整理内容；--retry 立即重试，不重置额度。",
 	"pause":      "daylog pause [--minutes 30] [--json]\n\n暂停 1–1440 分钟，到时自动恢复。提前恢复：daylog resume。",
 	"resume":     "daylog resume [--json]\n\n恢复记录，并确认后台已经恢复。",
 	"start":      "daylog start [--login] [--json]\n\n开始记录，首次需授权录屏。--login 同时启用登录启动。",

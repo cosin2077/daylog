@@ -164,11 +164,11 @@ func TestReviewTodaySummarizesAndBoundsHumanOutputOnly(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), "截图间隔") || !strings.Contains(string(data), "无法估时") {
 		t.Fatal("explicit method explanation is missing", err)
 	}
-	if strings.Contains(text, "\n  10:24–") {
+	if strings.Contains(text, "\n  10:24 ") {
 		t.Fatal("default human output remained unbounded")
 	}
 	data, err = commandOutput(t, append(args, "--full")...)
-	if err != nil || !strings.Contains(string(data), "\n  10:24–") {
+	if err != nil || !strings.Contains(string(data), "\n  10:24 ") {
 		t.Fatal("full view omitted records", err)
 	}
 	data, err = commandOutput(t, append(args, "--json")...)

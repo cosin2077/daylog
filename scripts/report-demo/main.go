@@ -46,7 +46,7 @@ func main() {
 	r := journal.Report{SchemaVersion: 2, AppSource: "window_server", BatchID: "demo-fragments", Start: at, End: at.Add(20 * time.Minute), Source: "demo"}
 	titles := []string{"修复登录问题", "回复群聊消息", "刷推荐内容", "记下临时事项", "处理日程提醒", "查看临时下载"}
 	categories := []string{"写代码", "聊天沟通", "看内容", "写东西", "处理杂事", "处理杂事"}
-	apps := []string{"Demo Editor", "Demo Chat", "Demo Browser", "Demo Notes", "Demo Calendar", "Demo Files"}
+	apps := []string{"com.microsoft.VSCode", "ru.keepcoder.Telegram", "com.google.Chrome", "com.apple.Notes", "com.apple.iCal", "com.apple.finder"}
 	sequence := []int{0, 0, 0, 0, 0, 1, 1, 0, 0, 2, 3, 3, 0, 0, 4, 0, 5, 5, 0, 0}
 	for task := 0; task < len(titles); task++ {
 		c := journal.Card{TaskID: fmt.Sprintf("demo-task-%d", task), ActivityID: fmt.Sprintf("demo-act-%d", task), Title: titles[task], Summary: "演示活动，用来展示短暂插入与返回。", Category: categories[task], Apps: []string{apps[task]}, Confidence: "medium", DurationMethod: "bounded_observation_v1"}
@@ -69,7 +69,7 @@ func main() {
 	}
 	for i, label := range sequence {
 		point := at.Add(time.Duration(i) * time.Minute)
-		r.TaskObservations = append(r.TaskObservations, journal.TaskObservation{At: point, TaskID: fmt.Sprintf("demo-task-%d", label), App: apps[label], MaxGapSeconds: 120})
+		r.TaskObservations = append(r.TaskObservations, journal.TaskObservation{At: point, State: "sampled", TaskID: fmt.Sprintf("demo-task-%d", label), App: apps[label], MaxGapSeconds: 120})
 		if i > 0 && label != sequence[i-1] {
 			r.UnknownSpans = append(r.UnknownSpans, journal.TimeSpan{Start: point.Add(-time.Minute), End: point})
 		}
@@ -80,6 +80,12 @@ func main() {
 		r.Cards = append(r.Cards, journal.Card{Title: fmt.Sprintf("单帧活动 %d", i+1), Summary: "合成单帧记录，不分配时长。", Category: "处理杂事", DurationMethod: "bounded_observation_v1", Start: point, End: point})
 	}
 	reports = append(reports, r)
+	previous := at.AddDate(0, 0, -1)
+	previousEnd := previous.Add(time.Minute)
+	reports = append(reports, journal.Report{SchemaVersion: 2, AppSource: "window_server", BatchID: journal.ID(previous), Start: previous, End: previousEnd,
+		Cards:            []journal.Card{{TaskID: "demo-prior", Title: "整理临时事项", Summary: "合成的前一天连续记录，用于展示切换对比。", Category: "处理杂事", Confidence: "medium", Start: previous, End: previousEnd, Spans: []journal.TimeSpan{{Start: previous, End: previousEnd}}}},
+		TaskObservations: []journal.TaskObservation{{At: previous, State: "sampled", App: "com.apple.Notes", TaskID: "demo-prior", MaxGapSeconds: 120}, {At: previousEnd, State: "sampled", App: "com.apple.Notes", TaskID: "demo-prior", MaxGapSeconds: 120}},
+	})
 	pending := []journal.Batch{{Start: anchor.Add(17 * time.Hour), End: anchor.Add(17*time.Hour + 15*time.Minute)}}
 	o := journal.BuildOverview(anchor, reports, pending, journal.Batch{})
 	o.Sample = true

@@ -272,3 +272,29 @@ func TestDoctorUsesHistoricalMetadataAndAlignsLabels(t *testing.T) {
 		t.Fatal("doctor retained model output")
 	}
 }
+
+func TestV4AnalyzeAcceptsNaturalIDAndRejectsConflicts(t *testing.T) {
+	s := configStore(t)
+	for _, args := range [][]string{{"analyze", "nonexist"}, {"analyze", "--json", "nonexist"}} {
+		_, err := commandOutput(t, append([]string{"--data", s.Root}, args...)...)
+		if err == nil || !strings.Contains(err.Error(), "找不到这段记录（nonexist）") || !strings.Contains(err.Error(), "daylog pending") {
+			t.Fatal("natural ID did not reach the actionable missing-record check", err)
+		}
+	}
+	_, err := commandOutput(t, "--data", s.Root, "analyze", "one", "--batch", "two")
+	if err == nil || !strings.Contains(err.Error(), "--batch") || !strings.Contains(err.Error(), "同时使用") {
+		t.Fatal("conflicting record IDs were silently resolved", err)
+	}
+}
+
+func TestV4TodayShowsOneTimestampForSubMinuteEntries(t *testing.T) {
+	at := time.Date(2026, 10, 15, 13, 14, 0, 0, time.Local)
+	for _, end := range []time.Time{at, at.Add(time.Nanosecond), at.Add(20 * time.Second)} {
+		if activityTime(at, end) != "13:14" {
+			t.Fatal("a point or sub-minute entry looks like a zero-length range")
+		}
+	}
+	if activityTime(at, at.Add(2*time.Minute)) != "13:14–13:16" {
+		t.Fatal("a real range lost its end")
+	}
+}

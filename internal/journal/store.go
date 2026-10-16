@@ -427,6 +427,7 @@ func (s *Store) Reports(start, end time.Time) ([]Report, error) {
 			if err = ReadJSON(filepath.Join(dir, entry.Name()), &r); err != nil {
 				return nil, err
 			}
+			r = estimateReport(s.observationStates(r))
 			cards := []Card{}
 			for _, card := range r.Cards {
 				if activityInRange(card.Start, card.End, start, end) {

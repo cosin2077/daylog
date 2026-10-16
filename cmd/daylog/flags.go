@@ -46,6 +46,9 @@ func (f *commandFlags) prepare(args []string) ([]string, error) {
 	}
 	if len(positionals) == 1 {
 		name, value := "", ""
+		if f.Name() == "analyze" {
+			name, value = "batch", positionals[0]
+		}
 		if f.Name() == "report" {
 			for _, kind := range []string{"day", "week", "month"} {
 				if positionals[0] == kind {

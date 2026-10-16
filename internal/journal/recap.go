@@ -69,25 +69,40 @@ func buildComparison(kind string, anchor, now time.Time, reports []Report) *Peri
 }
 
 func buildReview(p PeriodReport) ReviewSummary {
-	if len(p.Activities) == 0 {
-		return ReviewSummary{Headline: "这个时段还没有已整理的活动。", Advice: "先开始记录，积累一些活动后再来回顾。"}
+	scope := map[string]string{"day": "这一天", "week": "这一周", "month": "这个月", "range": "这段时间"}[p.Period]
+	if scope == "" {
+		scope = "这段时间"
 	}
-	ordered := append([]CategorySummary(nil), p.Categories...)
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].EstimatedSeconds > ordered[j].EstimatedSeconds })
-	var names []string
-	for _, c := range ordered {
-		if c.EstimatedSeconds > 0 && (len(names) == 0 || c.EstimatedSeconds*100 >= p.EstimatedSeconds*15) {
-			names = append(names, c.Name)
-		}
-		if len(names) == 2 {
+	next := map[string]string{"day": "下次", "week": "下周", "month": "下个月", "range": "下次"}[p.Period]
+	if next == "" {
+		next = "下次"
+	}
+	if len(p.Activities) == 0 {
+		return ReviewSummary{Headline: scope + "还没有已整理的活动。", Advice: next + "先积累一些记录，再回顾主要任务和连续时段。"}
+	}
+	r := ReviewSummary{}
+	for _, task := range p.Tasks {
+		if task.EstimatedSeconds > 0 {
+			title := task.Title
+			if len([]rune(title)) > 48 {
+				title = truncate(title, 48) + "…"
+			}
+			r.Headline = scope + "，最多时间在「" + title + "」。"
 			break
 		}
 	}
-	r := ReviewSummary{}
-	if len(names) > 0 {
-		r.Headline = "主要在" + strings.Join(names, "和") + "。"
-	} else {
-		r.Headline = fmt.Sprintf("记录了 %d 项活动，时长暂未估计。", len(p.Activities))
+	if r.Headline == "" {
+		ordered := append([]CategorySummary(nil), p.Categories...)
+		sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].EstimatedSeconds > ordered[j].EstimatedSeconds })
+		for _, c := range ordered {
+			if c.Name != "未细分" && c.EstimatedSeconds > 0 {
+				r.Headline = scope + "可归类的活动以" + c.Name + "为主。"
+				break
+			}
+		}
+		if r.Headline == "" {
+			r.Headline = fmt.Sprintf("%s记录了 %d 项活动，暂不足以概括主线。", scope, len(p.Activities))
+		}
 	}
 	var hours [24]int
 	for _, f := range p.Continuity.Fragments {
@@ -101,12 +116,17 @@ func buildReview(p PeriodReport) ReviewSummary {
 	}
 	if count >= 2 {
 		r.PeakHour = &peak
-		r.Headline += fmt.Sprintf("%d 点附近短时切换较多。", peak)
-		r.Advice = fmt.Sprintf("下次在 %02d:00 前留 10 分钟集中处理临时事项，再回到主要任务。", peak)
-	} else if p.Continuity.TaskSwitches > 0 {
-		r.Advice = "下次开始主要任务前，用 5 分钟处理临时事项，再留出一段连续时间。"
+	}
+	if (p.Period == "week" || p.Period == "month") && p.ActiveDays < 3 {
+		r.Advice = fmt.Sprintf("%s只有 %d 天记录，先不判断长期习惯。%s在相近时段记录几天，再比较连续时段和来回切换。", scope, p.ActiveDays, next)
+	} else if count >= 2 {
+		r.Advice = fmt.Sprintf("%s的短时切换较多出现在 %02d:00 附近。%s在这个时段前留 10 分钟集中处理临时事项，再比较来回切换是否减少。", scope, peak, next)
+	} else if p.Period == "week" {
+		r.Advice = "下周为排行中的主要任务预留两段连续时间；周末对照每天的记录，看看哪些时段更容易连续推进。"
+	} else if p.Period == "month" {
+		r.Advice = "下个月每周为主要任务预留两段连续时间；月底结合日历对照记录天数与最长连续时段。"
 	} else {
-		r.Advice = "下次开始记录时先选一件主要任务，结束后再回顾这段时间。"
+		r.Advice = "下次开始主要任务前，用 5 分钟处理临时事项，再留出一段连续时间。"
 	}
 	return r
 }
@@ -121,9 +141,21 @@ type FragmentSource struct {
 
 func displayApp(app string) string {
 	name := filepath.Base(app)
-	known := map[string]string{"com.tencent.xinwechat": "微信", "wechat.exe": "微信", "weixin.exe": "微信", "com.tencent.weworkmac": "企业微信", "wxwork.exe": "企业微信", "org.telegram.desktop": "Telegram", "telegram.exe": "Telegram", "com.google.chrome": "Chrome", "chrome.exe": "Chrome", "com.apple.safari": "Safari", "com.microsoft.edgemac": "Edge", "msedge.exe": "Edge", "com.microsoft.vscode": "VS Code", "code.exe": "VS Code", "com.openai.chat": "ChatGPT"}
+	known := map[string]string{"com.tencent.xinwechat": "微信", "wechat.exe": "微信", "weixin.exe": "微信", "com.tencent.weworkmac": "企业微信", "wxwork.exe": "企业微信", "org.telegram.desktop": "Telegram", "ru.keepcoder.telegram": "Telegram", "com.hnc.discord": "Discord", "com.apple.terminal": "终端", "com.apple.ical": "日历", "com.apple.finder": "访达", "com.apple.notes": "备忘录", "com.todesktop.230313mzl4w4u92": "Cursor", "com.microsoft.teams2": "Teams", "telegram.exe": "Telegram", "com.google.chrome": "Chrome", "chrome.exe": "Chrome", "com.apple.safari": "Safari", "com.microsoft.edgemac": "Edge", "msedge.exe": "Edge", "com.microsoft.vscode": "VS Code", "code.exe": "VS Code", "com.openai.chat": "ChatGPT"}
 	if v := known[strings.ToLower(name)]; v != "" {
 		return v
+	}
+	name = strings.TrimSuffix(name, ".app")
+	if strings.HasSuffix(strings.ToLower(name), ".exe") {
+		name = name[:len(name)-4]
+	}
+	for _, prefix := range []string{"com.", "org.", "net.", "io.", "app.", "dev.", "ru."} {
+		if strings.HasPrefix(strings.ToLower(name), prefix) {
+			parts := strings.Split(name, ".")
+			if len(parts) > 2 && parts[len(parts)-1] != "" {
+				return parts[len(parts)-1]
+			}
+		}
 	}
 	return name
 }

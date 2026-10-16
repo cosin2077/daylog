@@ -14,7 +14,7 @@ type TaskReturn struct {
 }
 
 // A short visit bracketed by another task on both sides. The surrounding
-// transition gaps locate the visit but are never charged to the visited task.
+// transition gaps locate the visit; this continuity measure excludes inferred time.
 type TimeFragment struct {
 	SourceApps       []string  `json:"source_apps,omitempty"`
 	TaskID           string    `json:"task_id"`
@@ -56,7 +56,7 @@ type ContinuitySummary struct {
 }
 
 // Separate two claims: touching evidence spans support duration; adjacent
-// labelled observations support a switch, but never duration across that gap.
+// labelled observations support a switch. Neighbor inference is excluded here.
 func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 	var result ContinuitySummary
 	type run struct {
@@ -84,6 +84,9 @@ func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 			titles[c.TaskID] = c.Title
 			categories[c.TaskID] = category(c.Category)
 			for _, s := range c.Spans {
+				if s.Inferred {
+					continue
+				}
 				clipped, ok := clipSpan(s, start, end)
 				if !ok {
 					continue
@@ -101,6 +104,9 @@ func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 			}
 		}
 		for _, p := range r.TaskObservations {
+			if p.State == "active" {
+				continue
+			}
 			if !p.At.Before(start) && p.At.Before(end) {
 				points = append(points, p)
 			}

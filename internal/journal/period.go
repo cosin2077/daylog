@@ -10,24 +10,26 @@ import (
 )
 
 type Activity struct {
-	LegacyCategory      string     `json:"legacy_category,omitempty"`
-	Uncertainties       []string   `json:"uncertainties,omitempty"`
-	Spans               []TimeSpan `json:"spans,omitempty"`
-	Apps                []string   `json:"apps,omitempty"`
-	InterpolatedSeconds int64      `json:"interpolated_seconds"`
-	TaskID              string     `json:"task_id,omitempty"`
-	ActivityID          string     `json:"activity_id,omitempty"`
-	EstimatedSeconds    int64      `json:"estimated_seconds"`
-	DurationMethod      string     `json:"duration_method"`
-	Confidence          string     `json:"confidence,omitempty"`
-	Start               time.Time  `json:"start"`
-	End                 time.Time  `json:"end"`
-	Title               string     `json:"title"`
-	Summary             string     `json:"summary"`
-	Category            string     `json:"category"`
-	Evidence            []string   `json:"evidence"`
-	BatchID             string     `json:"batch_id"`
-	Source              string     `json:"source"`
+	Parts               []ActivityPart `json:"parts,omitempty"`
+	InferredSeconds     int64          `json:"inferred_seconds"`
+	LegacyCategory      string         `json:"legacy_category,omitempty"`
+	Uncertainties       []string       `json:"uncertainties,omitempty"`
+	Spans               []TimeSpan     `json:"spans,omitempty"`
+	Apps                []string       `json:"apps,omitempty"`
+	InterpolatedSeconds int64          `json:"interpolated_seconds"`
+	TaskID              string         `json:"task_id,omitempty"`
+	ActivityID          string         `json:"activity_id,omitempty"`
+	EstimatedSeconds    int64          `json:"estimated_seconds"`
+	DurationMethod      string         `json:"duration_method"`
+	Confidence          string         `json:"confidence,omitempty"`
+	Start               time.Time      `json:"start"`
+	End                 time.Time      `json:"end"`
+	Title               string         `json:"title"`
+	Summary             string         `json:"summary"`
+	Category            string         `json:"category"`
+	Evidence            []string       `json:"evidence"`
+	BatchID             string         `json:"batch_id"`
+	Source              string         `json:"source"`
 }
 
 type CategorySummary struct {
@@ -64,6 +66,8 @@ type TimeBucket struct {
 }
 
 type PeriodReport struct {
+	Rhythm             []RhythmBlock     `json:"rhythm,omitempty"`
+	InferredSeconds    int64             `json:"inferred_seconds"`
 	Comparison         *PeriodComparison `json:"comparison,omitempty"`
 	Review             ReviewSummary     `json:"review"`
 	InterruptedBatches int               `json:"interrupted_batches"`
@@ -96,6 +100,7 @@ type PeriodReport struct {
 }
 
 type Overview struct {
+	Periods     []PeriodReport `json:"periods,omitempty"`
 	Calendar    []PeriodReport `json:"calendar,omitempty"`
 	Anchor      string         `json:"anchor"`
 	GeneratedAt time.Time      `json:"generated_at"`
@@ -124,7 +129,7 @@ func (s *Store) Overview(anchor time.Time) (Overview, error) {
 	var overview Overview
 	err := s.locked(func() error {
 		start, end, _ := PeriodBounds("month", anchor)
-		start = start.AddDate(0, -1, 0)
+		start = start.AddDate(0, -2, 0)
 		weekStart, weekEnd, _ := PeriodBounds("week", anchor)
 		if weekStart.Before(start) {
 			start = weekStart
@@ -163,6 +168,9 @@ func BuildOverview(anchor time.Time, reports []Report, pending []Batch, draft Ba
 		o.Views = append(o.Views, view)
 	}
 	start, end, _ := PeriodBounds("month", anchor)
+	start = start.AddDate(0, -1, 0)
+	navigationMonthStart := start
+	start, _, _ = PeriodBounds("week", start)
 	weekStart, weekEnd, _ := PeriodBounds("week", anchor)
 	if weekStart.Before(start) {
 		start = weekStart
@@ -174,6 +182,19 @@ func BuildOverview(anchor time.Time, reports []Report, pending []Batch, draft Ba
 		view := buildPeriod("day", day, reports, pending, draft)
 		view.Comparison = buildComparison("day", day, o.GeneratedAt, reports)
 		o.Calendar = append(o.Calendar, view)
+	}
+	_, monthEnd, _ := PeriodBounds("month", anchor)
+	for month := navigationMonthStart; month.Before(monthEnd); month = month.AddDate(0, 1, 0) {
+		monthStart, _, _ := PeriodBounds("month", month)
+		view := buildPeriod("month", monthStart, reports, pending, draft)
+		view.Comparison = buildComparison("month", monthStart, o.GeneratedAt, reports)
+		o.Periods = append(o.Periods, view)
+	}
+	firstWeek, _, _ := PeriodBounds("week", start)
+	for week := firstWeek; week.Before(end); week = week.AddDate(0, 0, 7) {
+		view := buildPeriod("week", week, reports, pending, draft)
+		view.Comparison = buildComparison("week", week, o.GeneratedAt, reports)
+		o.Periods = append(o.Periods, view)
 	}
 	return o
 }
@@ -217,6 +238,11 @@ func buildPeriod(kind string, anchor time.Time, reports []Report, pending []Batc
 }
 
 func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Report, pending []Batch, draft Batch) PeriodReport {
+	prepared := make([]Report, len(reports))
+	for i, r := range reports {
+		prepared[i] = estimateReport(r)
+	}
+	reports = prepared
 	p := PeriodReport{Period: kind, Anchor: anchor.Format("2006-01-02"), Start: start, End: end, Activities: []Activity{}, Categories: []CategorySummary{}, Days: []DaySummary{}}
 	byDay := map[string][]span{}
 	dayCount := map[string]int{}
@@ -224,7 +250,7 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 	counts := map[string]int{}
 	evidence := map[string]bool{}
 	batches := map[string]bool{}
-	var spans, estimated, legacy, unknown, interpolated []span
+	var spans, estimated, legacy, unknown, interpolated, inferred []span
 	categorySpans := map[string][]span{}
 	taskSpans := map[string][]span{}
 	taskTitles := map[string]string{}
@@ -275,7 +301,11 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 					for _, part := range c.Spans {
 						if clipped, ok := clipSpan(part, from, until); ok {
 							parts = append(parts, clipped)
-							a.Spans = append(a.Spans, TimeSpan{Start: clipped.start.In(start.Location()), End: clipped.end.In(start.Location()), Interpolated: part.Interpolated})
+							a.Spans = append(a.Spans, TimeSpan{Start: clipped.start.In(start.Location()), End: clipped.end.In(start.Location()), Interpolated: part.Interpolated, Inferred: part.Inferred})
+							if part.Inferred {
+								inferred = append(inferred, clipped)
+								a.InferredSeconds += int64(clipped.end.Sub(clipped.start) / time.Second)
+							}
 							if part.Interpolated {
 								interpolated = append(interpolated, clipped)
 								a.InterpolatedSeconds += int64(clipped.end.Sub(clipped.start) / time.Second)
@@ -311,6 +341,12 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 		}
 	}
 	sort.SliceStable(p.Activities, func(i, j int) bool { return p.Activities[i].Start.Before(p.Activities[j].Start) })
+	p.Activities = mergeActivities(p.Activities)
+	dayCount, counts = map[string]int{}, map[string]int{}
+	for _, a := range p.Activities {
+		dayCount[a.Start.Format("2006-01-02")]++
+		counts[a.Category]++
+	}
 	for _, b := range pending {
 		if b.Start.Before(end) && b.End.After(start) {
 			p.PendingBatches++
@@ -336,6 +372,7 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 	p.CoverageSeconds = covered(spans)
 	p.EstimatedSeconds = covered(estimated)
 	p.InterpolatedSeconds = covered(interpolated)
+	p.InferredSeconds = covered(inferred)
 	p.UnknownSeconds = covered(unknown)
 	for _, part := range unknown {
 		if len(p.UnknownSpans) > 0 && !part.start.After(p.UnknownSpans[len(p.UnknownSpans)-1].End) {
@@ -397,6 +434,7 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 		at = until
 	}
 	p.Continuity = buildContinuity(start, end, reports)
+	p.Rhythm = buildRhythm(p.Activities)
 	p.Review = buildReview(p)
 	p.Summary = p.Review.Headline
 	return p

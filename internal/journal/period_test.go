@@ -112,10 +112,14 @@ func TestCalendarIncludesClippedObservationAndUnknownSpans(t *testing.T) {
 		UnknownSpans: []TimeSpan{{Start: anchor.Add(time.Minute), End: anchor.Add(3 * time.Minute)}, {Start: anchor.Add(2 * time.Minute), End: anchor.Add(4 * time.Minute)}},
 		Cards:        []Card{{Start: anchor.Add(-time.Minute), End: anchor.Add(time.Minute), Title: "编辑", Category: "工作", TaskID: "task", DurationMethod: "bounded_observation_v1", Apps: []string{"Editor"}, Spans: []TimeSpan{{Start: anchor.Add(-time.Minute), End: anchor.Add(time.Minute)}}}}}
 	o := BuildOverview(anchor, []Report{r}, nil, Batch{})
-	if len(o.Calendar) != 31 {
+	byDate := map[string]PeriodReport{}
+	for _, d := range o.Calendar {
+		byDate[d.Anchor] = d
+	}
+	if len(o.Calendar) < 61 || byDate["2026-09-01"].Anchor == "" || byDate["2026-10-31"].Anchor == "" {
 		t.Fatal("date picker calendar missing")
 	}
-	day := o.Calendar[13]
+	day := byDate["2026-10-14"]
 	if day.Anchor != "2026-10-14" || day.EstimatedSeconds != 60 || day.UnknownSeconds != 180 || len(day.UnknownSpans) != 1 {
 		t.Fatalf("calendar time was double-counted: %+v", day)
 	}
@@ -123,7 +127,7 @@ func TestCalendarIncludesClippedObservationAndUnknownSpans(t *testing.T) {
 	if len(a.Spans) != 1 || !a.Spans[0].Start.Equal(anchor) || len(a.Apps) != 1 || a.Apps[0] != "Editor" {
 		t.Fatal("timeline lacks clipped evidence or app search metadata")
 	}
-	if o.Calendar[12].EstimatedSeconds != 60 || o.Calendar[14].EstimatedSeconds != 0 {
+	if byDate["2026-10-13"].EstimatedSeconds != 60 || byDate["2026-10-15"].EstimatedSeconds != 0 {
 		t.Fatal("calendar navigation leaked time across days")
 	}
 }

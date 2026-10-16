@@ -87,7 +87,7 @@ func TestRecapHeadlineUsesTimedCategoriesAndKeepsUnknownTasksSeparate(t *testing
 		r.Cards = append(r.Cards, Card{Title: "一次消息", Category: "聊天沟通", Start: point, End: point})
 	}
 	p := buildPeriod("day", at, []Report{r}, nil, Batch{})
-	if !strings.HasPrefix(p.Review.Headline, "主要在写代码。") || len(p.Tasks) != 0 || p.EstimatedSeconds != 660 {
+	if !strings.Contains(p.Review.Headline, "写代码为主") || strings.Contains(p.Review.Headline, "聊天沟通") || len(p.Tasks) != 0 || p.EstimatedSeconds != 660 {
 		t.Fatalf("untimed count overrode duration or unknown task IDs were merged: %+v", p.Review)
 	}
 }

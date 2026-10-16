@@ -52,42 +52,52 @@ func todayCommand(s *journal.Store, args []string) error {
 	}
 	fmt.Print("\n\n")
 	if total > 0 {
-		{
-			summary := view
-			if summary.EstimatedSeconds > 0 {
-				fmt.Printf("活动估计 %s\n", statusDuration(time.Duration(summary.EstimatedSeconds)*time.Second))
-			}
-			if *explain && summary.UnknownSeconds > 0 {
-				fmt.Printf("另有 %s 无法估时。\n", statusDuration(time.Duration(summary.UnknownSeconds)*time.Second))
-			}
-			if *explain && summary.UnknownSeconds > summary.EstimatedSeconds {
-				fmt.Println("单帧、截图间隔过大、任务切换或识别不确定都可能无法估时；待整理记录另行列出。")
-			}
-			tasks := 0
-			for _, task := range summary.Tasks {
-				if task.EstimatedSeconds <= 0 {
-					continue
-				}
-				if tasks == 0 {
-					fmt.Println("主要任务（观察估计）：")
-				}
-				fmt.Printf("  %s · %s\n", readable(task.Title), statusDuration(time.Duration(task.EstimatedSeconds)*time.Second))
-				tasks++
-				if tasks == 5 {
-					break
-				}
+		summary := view
+		if summary.EstimatedSeconds > 0 {
+			fmt.Printf("活动估计 %s", statusDuration(time.Duration(summary.EstimatedSeconds)*time.Second))
+			if summary.InferredSeconds > 0 {
+				fmt.Printf(" · 含区间推断 %s", statusDuration(time.Duration(summary.InferredSeconds)*time.Second))
 			}
 			fmt.Println()
 		}
+		if *explain && summary.UnknownSeconds > 0 {
+			fmt.Printf("另有 %s 无法估时。\n", statusDuration(time.Duration(summary.UnknownSeconds)*time.Second))
+		}
+		if *explain && summary.UnknownSeconds > summary.EstimatedSeconds {
+			fmt.Println("单帧、截图间隔过大、任务切换或识别不确定都可能无法估时；待整理记录另行列出。")
+		}
+		tasks := 0
+		for _, task := range summary.Tasks {
+			if task.EstimatedSeconds <= 0 {
+				continue
+			}
+			if tasks == 0 {
+				fmt.Println("主要任务（观察估计）：")
+			}
+			fmt.Printf("  %s · %s\n", readable(task.Title), statusDuration(time.Duration(task.EstimatedSeconds)*time.Second))
+			tasks++
+			if tasks == 5 {
+				break
+			}
+		}
+		fmt.Println()
 	}
 	shown := 0
 	for _, card := range view.Activities {
 		if !*full && shown >= *limit {
 			continue
 		}
-		fmt.Printf("  %s–%s  %s\n    %s", card.Start.Local().Format("15:04"), card.End.Local().Format("15:04"), readable(card.Title), readable(card.Summary))
+		fmt.Printf("  %s  %s\n    %s", activityTime(card.Start, card.End), readable(card.Title), readable(card.Summary))
 		if card.DurationMethod != "" {
 			fmt.Printf("（%s）", observationDuration(card.EstimatedSeconds))
+		}
+		if card.InferredSeconds > 0 {
+			fmt.Printf(" · 含区间推断 %s", statusDuration(time.Duration(card.InferredSeconds)*time.Second))
+		}
+		for i, part := range card.Parts {
+			if i > 0 && part.Summary != card.Summary {
+				fmt.Printf("\n    %s", readable(part.Summary))
+			}
 		}
 		fmt.Println()
 		shown++
@@ -102,6 +112,18 @@ func todayCommand(s *journal.Store, args []string) error {
 		fmt.Println("\n时长来自截图观察估计；未估时表示记录不足，不能作为精确工时。")
 	}
 	return nil
+}
+
+func activityTime(start, end time.Time) string {
+	start, end = start.Local(), end.Local()
+	from, to := start.Format("15:04"), end.Format("15:04")
+	if start.Format("2006-01-02") != end.Format("2006-01-02") {
+		to = "次日 " + to
+	}
+	if from == to {
+		return from
+	}
+	return from + "–" + to
 }
 
 func writeEmptyToday(s *journal.Store, date time.Time) {

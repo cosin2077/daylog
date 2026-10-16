@@ -20,6 +20,7 @@ type Observation struct {
 }
 
 type TimeSpan struct {
+	Inferred     bool      `json:"inferred,omitempty"`
 	Interpolated bool      `json:"interpolated,omitempty"`
 	Start        time.Time `json:"start"`
 	End          time.Time `json:"end"`
@@ -54,6 +55,7 @@ type Batch struct {
 }
 
 type Card struct {
+	InferredSeconds  int64      `json:"inferred_seconds,omitempty"`
 	ActivityID       string     `json:"activity_id,omitempty"`
 	TaskID           string     `json:"task_id,omitempty"`
 	Apps             []string   `json:"apps,omitempty"`
@@ -73,26 +75,28 @@ type Card struct {
 }
 
 type Report struct {
-	TaskObservations []TaskObservation `json:"task_observations,omitempty"`
-	AppSource        string            `json:"app_source,omitempty"`
-	SchemaVersion    int               `json:"schema_version,omitempty"`
-	Revision         int               `json:"revision,omitempty"`
-	PromptVersion    string            `json:"prompt_version,omitempty"`
-	Model            string            `json:"model,omitempty"`
-	Start            time.Time         `json:"start,omitempty"`
-	End              time.Time         `json:"end,omitempty"`
-	UnknownSeconds   int64             `json:"unknown_seconds,omitempty"`
-	UnknownSpans     []TimeSpan        `json:"unknown_spans,omitempty"`
-	InputHash        string            `json:"input_hash,omitempty"`
-	BatchID          string            `json:"batch_id"`
-	Source           string            `json:"source"`
-	CreatedAt        time.Time         `json:"created_at"`
-	Cards            []Card            `json:"cards"`
+	EstimationVersion string            `json:"estimation_version,omitempty"`
+	TaskObservations  []TaskObservation `json:"task_observations,omitempty"`
+	AppSource         string            `json:"app_source,omitempty"`
+	SchemaVersion     int               `json:"schema_version,omitempty"`
+	Revision          int               `json:"revision,omitempty"`
+	PromptVersion     string            `json:"prompt_version,omitempty"`
+	Model             string            `json:"model,omitempty"`
+	Start             time.Time         `json:"start,omitempty"`
+	End               time.Time         `json:"end,omitempty"`
+	UnknownSeconds    int64             `json:"unknown_seconds,omitempty"`
+	UnknownSpans      []TimeSpan        `json:"unknown_spans,omitempty"`
+	InputHash         string            `json:"input_hash,omitempty"`
+	BatchID           string            `json:"batch_id"`
+	Source            string            `json:"source"`
+	CreatedAt         time.Time         `json:"created_at"`
+	Cards             []Card            `json:"cards"`
 }
 
-// Empty TaskID is a boundary (idle, missing, ambiguous or unsupported evidence).
-// These observations are not additional screenshots and do not add duration.
+// Persisted task labels and availability for local estimates, not extra images.
+// Empty TaskID is unknown; state distinguishes an unidentified sample from a gap.
 type TaskObservation struct {
+	State         string    `json:"state,omitempty"`
 	At            time.Time `json:"at"`
 	App           string    `json:"app,omitempty"`
 	TaskID        string    `json:"task_id,omitempty"`

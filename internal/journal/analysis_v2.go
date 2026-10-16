@@ -251,18 +251,14 @@ func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
 		}
 		r.Cards = append(r.Cards, card)
 	}
-	// A model may join noncontiguous evidence of a task; only adjacent compatible
-	// observations produce time. Gaps and unselected evidence never get filled.
+	// Derive supported spans first. Bounded neighbor inference records its
+	// assumptions separately after this pass; unavailable gaps remain unknown.
 	labels, inferred := observationLabels(b, assigned)
 	if b.AppSource != "" {
 		for i, o := range b.Observations {
-			// App activation is a hint, not an unavailable period. It already
-			// breaks duration spans; compare the surrounding sampled tasks
-			// without inventing a task for an activation that has no picture.
-			if o.State == "active" {
-				continue
-			}
-			point := TaskObservation{At: o.At, App: o.App, MaxGapSeconds: b.MaxGapSeconds}
+			// Preserve app activation as timing information. Without a picture
+			// it does not identify a task; availability gaps remain distinct.
+			point := TaskObservation{At: o.At, App: o.App, State: o.State, MaxGapSeconds: b.MaxGapSeconds}
 			if label := labels[i]; label >= 0 && r.Cards[label].Confidence != "low" {
 				point.TaskID = r.Cards[label].TaskID
 			}
@@ -309,13 +305,16 @@ func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
 		Observations  []Observation
 		MaxGap        int
 		Prompt, Model string
-	}{inputMetadata(b), b.Observations, b.MaxGapSeconds, "activity-v2.2", model})
+		Estimation    string
+	}{inputMetadata(b), b.Observations, b.MaxGapSeconds, "activity-v2.2", model, estimationVersion})
 	hash := sha256.Sum256(hashData)
 	r.InputHash = hex.EncodeToString(hash[:])
+	r = estimateReport(r)
+	r.EstimationVersion = estimationVersion
 	return r, nil
 }
 func appendSpan(spans []TimeSpan, p TimeSpan) []TimeSpan {
-	if len(spans) > 0 && spans[len(spans)-1].End.Equal(p.Start) && spans[len(spans)-1].Interpolated == p.Interpolated {
+	if len(spans) > 0 && spans[len(spans)-1].End.Equal(p.Start) && spans[len(spans)-1].Interpolated == p.Interpolated && spans[len(spans)-1].Inferred == p.Inferred {
 		spans[len(spans)-1].End = p.End
 		return spans
 	}
