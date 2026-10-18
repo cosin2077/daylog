@@ -9,11 +9,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
+
+var localTaskKey = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,40}$`)
 
 // Model output has no timestamps. Only local observations determine duration.
 type Interpretation struct {
@@ -22,6 +25,8 @@ type Interpretation struct {
 	Segments      []Segment `json:"segments"`
 }
 type Segment struct {
+	TaskKey       string   `json:"task_key,omitempty"`
+	TaskTitle     string   `json:"task_title,omitempty"`
 	Title         string   `json:"title"`
 	Summary       string   `json:"summary"`
 	Category      string   `json:"category"`
@@ -99,7 +104,9 @@ func decodeInterpretation(b Batch, data []byte) (Interpretation, error) {
 
 // Persist the exact bounded context given to the model, so commit validates the
 // same allowlist even if another batch is processed in the meantime.
-func (s *Store) PrepareAnalysis(id string) (Batch, error) {
+func (s *Store) PrepareAnalysis(id string) (Batch, error) { return s.analysisContext(id, true) }
+func (s *Store) PreviewAnalysis(id string) (Batch, error) { return s.analysisContext(id, false) }
+func (s *Store) analysisContext(id string, freeze bool) (Batch, error) {
 	var b Batch
 	err := s.locked(func() error {
 		var err error
@@ -115,7 +122,11 @@ func (s *Store) PrepareAnalysis(id string) (Batch, error) {
 		for _, r := range reports {
 			for _, c := range r.Cards {
 				if c.TaskID != "" && !c.End.After(b.Start) {
-					candidates = append(candidates, TaskContext{c.TaskID, c.Title, c.Summary, c.End})
+					title := c.TaskTitle
+					if title == "" {
+						title = c.Title
+					}
+					candidates = append(candidates, TaskContext{c.TaskID, title, c.Summary, c.End})
 				}
 			}
 		}
@@ -138,6 +149,9 @@ func (s *Store) PrepareAnalysis(id string) (Batch, error) {
 			if len(b.Context) == 5 {
 				break
 			}
+		}
+		if !freeze {
+			return nil
 		}
 		b.ContextReady = true
 		// Preparing an archived batch is read-only.
@@ -189,7 +203,7 @@ func inputMetadata(b Batch) []byte {
 }
 
 func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
-	r := Report{AppSource: b.AppSource, SchemaVersion: 2, Revision: 1, PromptVersion: "activity-v2.2", Model: model, BatchID: b.ID, Start: b.Start, End: b.End, Cards: []Card{}}
+	r := Report{AppSource: b.AppSource, SchemaVersion: 2, Revision: 1, PromptVersion: "activity-v2.3", Model: model, BatchID: b.ID, Start: b.Start, End: b.End, Cards: []Card{}}
 	if b.SchemaVersion != 2 || in.SchemaVersion != 2 || in.BatchID != b.ID || in.Segments == nil || len(in.Segments) > 12 {
 		return r, errors.New("invalid v2 batch or segment count")
 	}
@@ -201,8 +215,11 @@ func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
 		frames[f.ID] = f
 	}
 	allowedTasks := map[string]bool{}
+	taskTitles := map[string]string{}
+	localTitles := map[string]string{}
 	for _, c := range b.Context {
 		allowedTasks[c.TaskID] = true
+		taskTitles[c.TaskID] = c.Title
 	}
 	assigned := map[string]int{}
 	for i, g := range in.Segments {
@@ -221,9 +238,25 @@ func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
 		if g.TaskID != "" && (!allowedTasks[g.TaskID] || g.Confidence == "low") {
 			return r, errors.New("task link absent from context or unsupported")
 		}
+		if g.TaskKey != "" {
+			if !localTaskKey.MatchString(g.TaskKey) || g.TaskID != "" || g.Confidence == "low" || strings.TrimSpace(g.TaskTitle) == "" || utf8.RuneCountInString(g.TaskTitle) > 120 {
+				return r, errors.New("invalid local task link")
+			}
+			if title, exists := localTitles[g.TaskKey]; exists && title != g.TaskTitle {
+				return r, errors.New("conflicting local task title")
+			}
+			localTitles[g.TaskKey] = g.TaskTitle
+		} else if g.TaskTitle != "" {
+			return r, errors.New("task title requires local task key")
+		}
 		card := Card{ActivityID: fmt.Sprintf("act_%s_%02d", b.ID, i), TaskID: g.TaskID, Title: g.Title, Summary: g.Summary, Category: g.Category, Object: g.Object, Actions: g.Actions, Confidence: g.Confidence, Uncertainties: g.Uncertainties, Evidence: g.Evidence, DurationMethod: "bounded_observation_v1"}
-		if card.TaskID == "" {
+		if g.TaskKey != "" {
+			card.TaskID = "task_" + b.ID + "_local_" + g.TaskKey
+			card.TaskTitle = g.TaskTitle
+		} else if card.TaskID == "" {
 			card.TaskID = fmt.Sprintf("task_%s_%02d", b.ID, i)
+		} else {
+			card.TaskTitle = taskTitles[card.TaskID]
 		}
 		apps := map[string]bool{}
 		for _, id := range g.Evidence {
@@ -306,7 +339,7 @@ func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
 		MaxGap        int
 		Prompt, Model string
 		Estimation    string
-	}{inputMetadata(b), b.Observations, b.MaxGapSeconds, "activity-v2.2", model, estimationVersion})
+	}{inputMetadata(b), b.Observations, b.MaxGapSeconds, "activity-v2.3", model, estimationVersion})
 	hash := sha256.Sum256(hashData)
 	r.InputHash = hex.EncodeToString(hash[:])
 	r = estimateReport(r)
@@ -325,7 +358,7 @@ func validateObservations(b Batch) error {
 	if b.SupportGapSeconds < 0 || b.SupportGapSeconds > 600 {
 		return errors.New("invalid support gap")
 	}
-	if b.MaxGapSeconds < 30 || b.MaxGapSeconds > 600 || len(b.Observations) > 2048 {
+	if b.MaxGapSeconds < 20 || b.MaxGapSeconds > 600 || len(b.Observations) > 2048 {
 		return errors.New("invalid observation bounds")
 	}
 	prev := b.Start

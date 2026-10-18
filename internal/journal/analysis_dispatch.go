@@ -12,6 +12,9 @@ import (
 // One lock and one failure round across every configured provider. Each actual
 // request still reserves its own daily call/image budget.
 func (s *Store) analysisRound(ctx context.Context, id string, notifications bool, call func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	lock, err := os.OpenFile(filepath.Join(s.Root, "analysis.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
@@ -24,7 +27,19 @@ func (s *Store) analysisRound(ctx context.Context, id string, notifications bool
 	if err = s.removeAbandonedJobs(); err != nil {
 		return err
 	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	err = call()
+	if err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	var preparation *preparationError
+	if ctx.Err() == nil && errors.As(err, &preparation) {
+		if saveErr := s.Failed(id, preparation.reason); saveErr != nil {
+			return errors.Join(err, saveErr)
+		}
+	}
 	if err != nil && ctx.Err() == nil && !errors.Is(err, ErrDailyBudget) && !errors.Is(err, ErrRetryCooling) {
 		if b, readErr := s.Batch(id); readErr == nil && b.LastError != "" {
 			var notify func() error
@@ -54,6 +69,10 @@ func (s *Store) AnalyzeConfigured(ctx context.Context, id string, c Config, key,
 			return s.analyzeAPI(ctx, id, c, key, client, false)
 		}
 		err := s.analyzeAgent(ctx, id, c, "")
+		var preparation *preparationError
+		if errors.As(err, &preparation) {
+			return err
+		}
 		if err == nil || !c.AI.Enabled || !c.AI.FallbackAfterAgents || ctx.Err() != nil || errors.Is(err, ErrDailyBudget) || errors.Is(err, ErrRetryCooling) {
 			return err
 		}

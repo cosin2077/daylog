@@ -47,7 +47,7 @@ type Control struct {
 
 func (r *Runner) snapshot() Status { r.mu.Lock(); defer r.mu.Unlock(); return r.status }
 
-func (r *Runner) Run(ctx context.Context) error {
+func (r *Runner) Run(ctx context.Context) (runErr error) {
 	if err := r.Config.Validate(); err != nil {
 		return err
 	}
@@ -93,7 +93,10 @@ func (r *Runner) Run(ctx context.Context) error {
 		listener.Close()
 		workers.Wait()
 		r.noteState(time.Now(), "stopped", "")
-		_ = r.seal()
+		if sealErr := r.seal(); sealErr != nil {
+			r.setSealError(sealErr)
+			runErr = errors.Join(runErr, fmt.Errorf("记录已停止，但草稿尚未封批，数据已保留：%w", sealErr))
+		}
 		r.publish()
 	}()
 	for {
@@ -241,7 +244,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		}
 		r.noteState(now, state, "")
 		if err = r.seal(); err != nil {
-			r.setError("queue_full")
+			r.setSealError(err)
 		} else {
 			r.setError(p.PauseReason)
 		}
@@ -253,7 +256,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		r.status.SkippedIdle++
 		r.mu.Unlock()
 		if err = r.seal(); err != nil {
-			r.setError("queue_full")
+			r.setSealError(err)
 		} else {
 			r.setError("")
 		}
@@ -266,7 +269,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 			r.status.SkippedBlocked++
 			r.mu.Unlock()
 			if err = r.seal(); err != nil {
-				r.setError("queue_full")
+				r.setSealError(err)
 			} else {
 				r.setError("")
 			}
@@ -281,7 +284,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 	if !r.lastTick.IsZero() && now.Sub(r.lastTick) > 3*p.Delay {
 		r.noteState(now, "missing", "")
 		if err = r.seal(); err != nil {
-			r.setError("queue_full")
+			r.setSealError(err)
 			return p.Delay
 		}
 	}
@@ -290,7 +293,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 	if len(r.draft.Frames) > 0 && now.Sub(r.draft.Start) >= time.Duration(r.Config.BatchSeconds)*time.Second {
 		r.draft.End = r.draft.Start.Add(time.Duration(r.Config.BatchSeconds) * time.Second)
 		if err = r.seal(); err != nil {
-			r.setError("queue_full")
+			r.setSealError(err)
 			return p.Delay
 		}
 	}
@@ -421,6 +424,13 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 	return p.Delay
 }
 
+func (r *Runner) setSealError(err error) {
+	if errors.Is(err, ErrQueueFull) {
+		r.setError("queue_full")
+	} else {
+		r.setError("batch_seal_failed")
+	}
+}
 func (r *Runner) seal() error {
 	if len(r.draft.Frames) == 0 {
 		return nil

@@ -7,7 +7,7 @@ var commandUsage = map[string]string{
 	"status":     "daylog status [--verbose] [--json]\n\n查看记录状态和下一步。--verbose 显示截图、进程和整理详情。",
 	"report":     reportHelp,
 	"config":     configHelp,
-	"pending":    "daylog pending [--limit N] [--json]\n\n查看待整理的记录，默认最多显示 10 段。--json 包含记录编号和截图路径，供 Agent 使用。",
+	"pending":    "daylog pending [--limit N] [--json] [--prepare]\n\n文本默认最多显示 10 段；JSON 默认返回完整数组。显式 --limit 的 JSON 各项含 queue_total/queue_has_more。空数组表示队列为空。普通查询只预览上下文；手工读图前用 --prepare --json 冻结所选批次的关联候选。",
 	"analyze":    "daylog analyze [ID | --batch ID] [--retry] [--agent NAME] [--allow-battery] [--json]\n\n整理一段记录。先用 daylog pending 查看待整理内容；--retry 立即重试，不重置额度。",
 	"pause":      "daylog pause [--minutes 30] [--json]\n\n暂停 1–1440 分钟，到时自动恢复。提前恢复：daylog resume。",
 	"resume":     "daylog resume [--json]\n\n恢复记录，并确认后台已经恢复。",

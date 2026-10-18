@@ -250,6 +250,13 @@ func executeCommand(args []string) error {
 		if err = removeServiceFile(home, s.Root); err != nil {
 			return err
 		}
+		var draft journal.Batch
+		if readErr := journal.ReadJSON(filepath.Join(s.Root, "draft.json"), &draft); readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return errors.New("记录已停止，但无法检查草稿状态；请运行 daylog doctor")
+		}
+		if len(draft.Frames) > 0 {
+			return errors.New("记录已停止，但仍有未封批草稿，数据已保留；请运行 daylog doctor 检查后重新启动")
+		}
 		if *asJSON {
 			return output(map[string]string{"state": "stopped"})
 		}
@@ -484,9 +491,19 @@ func executeCommand(args []string) error {
 	case "pending":
 		f := flags("pending")
 		asJSON := f.Bool("json", false, "JSON output")
-		limit := f.Int("limit", 10, "record limit")
+		limit := f.Int("limit", 10, "record limit; JSON defaults to the full queue")
+		prepare := f.Bool("prepare", false, "freeze context for manual analysis; requires --json")
 		if err = f.Parse(args[1:]); err != nil {
 			return err
+		}
+		explicitLimit := false
+		f.Visit(func(value *flag.Flag) {
+			if value.Name == "limit" {
+				explicitLimit = true
+			}
+		})
+		if *prepare && !*asJSON {
+			return errors.New("--prepare 需要与 --json 一起使用；普通查询不冻结分析上下文")
 		}
 		if *limit < 1 || *limit > 256 {
 			return errors.New("limit must be 1..256")
@@ -496,7 +513,7 @@ func executeCommand(args []string) error {
 			return err
 		}
 		total := len(batches)
-		if len(batches) > *limit {
+		if (!*asJSON || explicitLimit) && len(batches) > *limit {
 			batches = batches[:*limit]
 		}
 		if !*asJSON {
@@ -505,19 +522,28 @@ func executeCommand(args []string) error {
 		}
 		out := []map[string]any{}
 		for _, b := range batches {
-			b, err = s.PrepareAnalysis(b.ID)
+			if *prepare {
+				b, err = s.PrepareAnalysis(b.ID)
+			} else {
+				b, err = s.PreviewAnalysis(b.ID)
+			}
 			if err != nil {
 				return err
 			}
 			paths := []string{}
+			available := true
 			for _, frame := range b.Frames {
 				path, err := s.FramePath(frame)
 				if err != nil {
-					return errors.New("pending screenshot evidence unavailable")
+					available = false
+					continue // Keep the broken batch visible without offering misaligned paths.
 				}
 				paths = append(paths, path)
 			}
-			out = append(out, map[string]any{"batch": b, "image_paths": paths})
+			if !available {
+				paths = []string{}
+			}
+			out = append(out, map[string]any{"batch": b, "image_paths": paths, "evidence_available": available, "context_preview": b.SchemaVersion == 2 && !b.ContextReady, "queue_total": total, "queue_has_more": total > len(batches)})
 		}
 		return output(out)
 	case "commit":

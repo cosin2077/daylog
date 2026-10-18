@@ -76,7 +76,7 @@ func (s *Store) analyzeAPI(ctx context.Context, id string, c Config, key string,
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	b, err := s.PrepareAnalysis(id)
+	b, err := s.PreviewAnalysis(id)
 	if err != nil {
 		return err
 	}
@@ -85,24 +85,21 @@ func (s *Store) analyzeAPI(ctx context.Context, id string, c Config, key string,
 	parts = append(parts, map[string]any{"type": "text", "text": string(metadata)})
 	var totalBytes int
 	for _, f := range b.Frames {
-		path, err := s.FramePath(f)
+		data, err := s.analysisImage(ctx, f)
 		if err != nil {
-			_ = s.Failed(id, "evidence_unavailable")
-			return errors.New("batch evidence unavailable")
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return errors.New("batch evidence unavailable")
-		}
-		if err = checkFrameDigest(f, data); err != nil {
 			return err
 		}
 		totalBytes += len(data)
 		if totalBytes > 12<<20 {
-			return errors.New("batch images exceed 12 MiB")
+			return &preparationError{"evidence_size_limit"}
 		}
 		parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data)}})
 	}
+	b, err = s.PrepareAnalysis(id)
+	if err != nil {
+		return err
+	}
+	parts[0] = map[string]any{"type": "text", "text": string(inputMetadata(b))}
 	request := map[string]any{"model": c.AI.Model, "max_tokens": 1800, "messages": []map[string]any{
 		{"role": "system", "content": instructionsForBatch(b)}, {"role": "user", "content": parts},
 	}}

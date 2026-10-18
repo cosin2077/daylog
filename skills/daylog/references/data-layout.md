@@ -76,3 +76,11 @@ Fragment sources group actual application metadata for each short visit; counts 
 Old records may be recomputed in memory using archived observation states; no stored report is rewritten or screenshot reanalyzed. Missing archives retain the old uncertainty. Counts and estimates can change when regenerated under the new method; distinguish that from a change in the user's behavior.
 
 Adjacent entries merge only with the same stable task ID/category, touching times, and local day. `activities[].parts` retains the constituent activity/batch IDs, source, title, summary and bounds. Do not merge by title. `Overview.periods` supplies selectable week/month objects, and `calendar` includes their edge days. The period JSON endpoint still returns one selected period.
+
+## 查询与证据强度补充
+
+`pending --json` 默认返回全部待整理项，保持数组形状。`--limit N` 的各项提供 `queue_total`、`queue_has_more`；空数组表示没有待整理项。普通查询的 context 是实时预览，不持久化；手工分析前用 `pending --prepare --json --limit 1` 冻结所返回候选，随后 commit 使用相同 allowlist。不要把查询当成模型调用。准备阶段的缺图、摘要不符或损坏图片会进入独立失败退避，不增加供应商 attempts/调用预算；修复证据后可 `analyze --batch ID --retry`。
+
+`interpolated_seconds` 是跨过未交给模型辨认的新图的关键帧插值；`inferred_seconds` 是有上限的相邻观察推断。两者都是 estimated_seconds 的子集，不额外相加；最长连续观察不含这两类估计。重复引用同一张已辨认图片的观察不属于“省略的新图”。合法 10 秒采样生成 20 秒支持上限，仍按实际间隔限制估计，不把稀疏记录放宽成连续投入。
+
+活动片段的 category 描述动作；任务排行按目标 task_id 聚合。同批不同动作可用相同 task_key + task_title 关联新目标，但仍分别保留分类；程序将 key 限定在本批作用域。跨批只允许复用 context 中的 task_id；低置信片段不能创建关联。关联是模型判断，不证明完成或专注。

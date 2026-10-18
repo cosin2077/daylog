@@ -183,7 +183,7 @@ func estimateReport(input Report) Report {
 
 func neighborGap(a, b TaskObservation) bool {
 	gap := b.At.Sub(a.At)
-	return a.MaxGapSeconds >= 30 && b.MaxGapSeconds >= 30 && a.MaxGapSeconds <= 600 && b.MaxGapSeconds <= 600 && gap > 0 && gap <= time.Duration(min(a.MaxGapSeconds, b.MaxGapSeconds, 300))*time.Second
+	return a.MaxGapSeconds >= 20 && b.MaxGapSeconds >= 20 && a.MaxGapSeconds <= 600 && b.MaxGapSeconds <= 600 && gap > 0 && gap <= time.Duration(min(a.MaxGapSeconds, b.MaxGapSeconds, 300))*time.Second
 }
 
 func minTime(a, b time.Time) time.Time {

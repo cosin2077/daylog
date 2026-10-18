@@ -87,7 +87,7 @@ func reportCommand(ctx context.Context, s *journal.Store, args []string) error {
 
 func presentOverview(ctx context.Context, s *journal.Store, overview journal.Overview, period string, noOpen bool) error {
 	for _, view := range overview.Views {
-		if view.Period == period && len(view.Activities) == 0 && view.PendingBatches == 0 && view.DraftFrames == 0 {
+		if view.Period == period && len(view.Activities) == 0 && view.PendingBatches == 0 && view.DraftFrames == 0 && view.AnalyzedBatches == 0 && view.UnknownSeconds == 0 {
 			fmt.Printf("%s 没有记录。\n", view.Anchor)
 			if latest, err := s.LatestActivityDate(); err == nil && !latest.IsZero() {
 				fmt.Printf("最近有记录：%s（daylog report --date %s）\n", latest.Format("01-02"), latest.Format("2006-01-02"))

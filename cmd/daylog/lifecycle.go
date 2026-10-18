@@ -274,6 +274,8 @@ func recordingReason(reason string) string {
 		return "系统温度恢复后自动继续"
 	case "screen_permission_required":
 		return "录屏权限尚未生效，请重新运行 daylog start"
+	case "batch_seal_failed":
+		return "草稿尚未封批，数据已保留；请运行 daylog doctor 检查磁盘与数据目录"
 	case "queue_full":
 		return "待整理记录已达上限"
 	default:

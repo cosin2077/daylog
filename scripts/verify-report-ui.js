@@ -80,7 +80,7 @@ async (page) => {
     const list = page.locator('.timeline-list');
     const descriptions = await list.innerText();
     assert(descriptions.includes('09:00–09:12') && descriptions.includes('写代码'), 'Ordinary interval lacks description');
-    assert(descriptions.includes('含区间推断'), 'Inferred interval is not identified');
+    assert(descriptions.includes('含邻接推断'), 'Inferred interval is not identified');
     assert(descriptions.includes('单帧活动 1') && descriptions.includes('时长未估'), 'Single-frame point lacks equivalent text');
     assert(await list.locator('li').count() === await page.locator('.rhythm-part,.rhythm-point').count(), 'Some timeline marks lack descriptions');
     assert(await page.locator('.rhythm-part,.rhythm-point').evaluateAll(ns => ns.every(n => n.tabIndex < 0)), 'Tiny marks created excessive tab stops');

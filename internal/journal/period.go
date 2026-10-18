@@ -322,6 +322,9 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 						taskSpans[c.TaskID] = append(taskSpans[c.TaskID], parts...)
 						if _, exists := taskTitles[c.TaskID]; !exists || a.EstimatedSeconds > taskTitleSeconds[c.TaskID] {
 							taskTitles[c.TaskID] = c.Title
+							if c.TaskTitle != "" {
+								taskTitles[c.TaskID] = c.TaskTitle
+							}
 							taskTitleSeconds[c.TaskID] = a.EstimatedSeconds
 						}
 					}

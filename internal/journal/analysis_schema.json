@@ -78,6 +78,14 @@
               "type": "string"
             },
             "maxItems": 8
+          },
+          "task_key": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "task_title": {
+            "type": "string",
+            "maxLength": 120
           }
         }
       }

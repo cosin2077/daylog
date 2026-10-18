@@ -82,9 +82,12 @@ func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 				continue
 			}
 			titles[c.TaskID] = c.Title
+			if c.TaskTitle != "" {
+				titles[c.TaskID] = c.TaskTitle
+			}
 			categories[c.TaskID] = category(c.Category)
 			for _, s := range c.Spans {
-				if s.Inferred {
+				if s.Inferred || s.Interpolated {
 					continue
 				}
 				clipped, ok := clipSpan(s, start, end)
@@ -170,12 +173,12 @@ func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 	}
 	var visits []run
 	for i, p := range unique {
-		valid := p.TaskID != "" && titles[p.TaskID] != "" && p.MaxGapSeconds >= 30 && p.MaxGapSeconds <= 600
+		valid := p.TaskID != "" && titles[p.TaskID] != "" && p.MaxGapSeconds >= 20 && p.MaxGapSeconds <= 600
 		connected := false
 		if i > 0 && valid && len(visits) > 0 {
 			prev := unique[i-1]
 			limit := min(prev.MaxGapSeconds, p.MaxGapSeconds)
-			connected = prev.TaskID != "" && limit >= 30 && p.At.Sub(prev.At) <= time.Duration(limit)*time.Second && sameDay(prev.At, p.At, start.Location())
+			connected = prev.TaskID != "" && limit >= 20 && p.At.Sub(prev.At) <= time.Duration(limit)*time.Second && sameDay(prev.At, p.At, start.Location())
 		}
 		if !connected {
 			visits = nil

@@ -55,6 +55,7 @@ type Batch struct {
 }
 
 type Card struct {
+	TaskTitle        string     `json:"task_title,omitempty"`
 	InferredSeconds  int64      `json:"inferred_seconds,omitempty"`
 	ActivityID       string     `json:"activity_id,omitempty"`
 	TaskID           string     `json:"task_id,omitempty"`

@@ -115,7 +115,7 @@ func (s *Store) RequestRetry(id string) error {
 // New data gets priority, so a large failed backlog cannot starve current work.
 func nextAnalysis(pending []Batch, now time.Time) (Batch, bool) {
 	for _, b := range pending {
-		if b.Attempts == 0 && RetryReady(b, now) {
+		if b.Attempts == 0 && b.FailureRounds == 0 && RetryReady(b, now) {
 			return b, true
 		}
 	}
@@ -156,6 +156,10 @@ func FailureReason(reason string) string {
 		return "模型等待超时"
 	case strings.Contains(reason, "canceled"):
 		return "调用被停止或系统暂停"
+	case strings.Contains(reason, "evidence"):
+		return "截图证据缺失、损坏或校验不符；请检查原文件后重试"
+	case strings.Contains(reason, "preparation_storage"):
+		return "整理临时文件写入失败，请检查磁盘空间与权限"
 	case strings.Contains(reason, "validation") || strings.Contains(reason, "invalid_"):
 		return "返回内容缺少有效活动或截图证据"
 	case strings.Contains(reason, "cli_exit") || strings.Contains(reason, "agent_error"):
@@ -166,8 +170,6 @@ func FailureReason(reason string) string {
 		return "模型接口返回错误"
 	case strings.Contains(reason, "network"):
 		return "模型网络请求失败"
-	case strings.Contains(reason, "evidence"):
-		return "截图证据不可用"
 	default:
 		return "整理尚未成功，请用 daylog doctor 检查"
 	}

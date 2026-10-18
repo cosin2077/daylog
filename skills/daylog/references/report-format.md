@@ -55,3 +55,5 @@ One to eight ordered cards, with no overlaps. Each interval must stay within the
 Group related IDE, terminal and browser activity by the immediate task goal. Screenshot sampling cannot establish precise time spent or successful completion; use conservative summaries. If the batch contains only one frame, one short card is acceptable. Do not stretch it to a long duration to fill a gap.
 
 Use a private temporary file (0600), commit with the CLI, delete the temporary file, and verify with `today --json`. Reports and screenshot data remain sensitive even without an API key.
+
+同一目标的不同动作（编码、查文档、相关沟通）分别输出活动片段与 category；相同动作的相似截图可合并，不要求逐图拆分。若这些片段有明确共同的新目标，可添加相同 `task_key`（ASCII 字母/数字/下划线/短横线，1–40位）与相同 `task_title`（1–120字符）。不与 `task_id` 同填，低置信片段不填关联；已有目标使用请求 context 中的 task_id。程序生成稳定于本批的任务 ID，类别分布仍统计片段动作。

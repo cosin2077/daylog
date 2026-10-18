@@ -16,10 +16,11 @@ type ActivityPart struct {
 }
 
 type RhythmBlock struct {
-	Start           time.Time `json:"start"`
-	End             time.Time `json:"end"`
-	Category        string    `json:"category"`
-	InferredSeconds int64     `json:"inferred_seconds"`
+	InterpolatedSeconds int64     `json:"interpolated_seconds"`
+	Start               time.Time `json:"start"`
+	End                 time.Time `json:"end"`
+	Category            string    `json:"category"`
+	InferredSeconds     int64     `json:"inferred_seconds"`
 }
 
 // Only touching entries with the same stable task and category can coalesce.
@@ -90,7 +91,11 @@ func buildRhythm(activities []Activity) []RhythmBlock {
 			if p.Inferred {
 				inferred = int64(p.End.Sub(p.Start) / time.Second)
 			}
-			input = append(input, RhythmBlock{p.Start, p.End, a.Category, inferred})
+			interpolated := int64(0)
+			if p.Interpolated {
+				interpolated = int64(p.End.Sub(p.Start) / time.Second)
+			}
+			input = append(input, RhythmBlock{Start: p.Start, End: p.End, Category: a.Category, InferredSeconds: inferred, InterpolatedSeconds: interpolated})
 		}
 	}
 	sort.SliceStable(input, func(i, j int) bool { return input[i].Start.Before(input[j].Start) })
@@ -101,6 +106,7 @@ func buildRhythm(activities []Activity) []RhythmBlock {
 			if last.Category == p.Category && last.End.Equal(p.Start) && sameDay(last.Start, p.Start, last.Start.Location()) {
 				last.End = p.End
 				last.InferredSeconds += p.InferredSeconds
+				last.InterpolatedSeconds += p.InterpolatedSeconds
 				continue
 			}
 		}

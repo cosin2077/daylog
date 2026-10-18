@@ -77,12 +77,17 @@ func buildReview(p PeriodReport) ReviewSummary {
 	if next == "" {
 		next = "下次"
 	}
+	if len(p.Activities) == 0 && p.AnalyzedBatches > 0 {
+		return ReviewSummary{Headline: fmt.Sprintf("%s已整理 %d 段记录，尚未识别出可描述的活动。", scope, p.AnalyzedBatches), Advice: "可展开未估时区间查看记录范围；检查截图是否清晰、模型是否支持读图。没有识别到活动不代表没有记录。"}
+	}
 	if len(p.Activities) == 0 {
 		return ReviewSummary{Headline: scope + "还没有已整理的活动。", Advice: next + "先积累一些记录，再回顾主要任务和连续时段。"}
 	}
 	r := ReviewSummary{}
+	hasTimedTask := false
 	for _, task := range p.Tasks {
 		if task.EstimatedSeconds > 0 {
+			hasTimedTask = true
 			title := task.Title
 			if len([]rune(title)) > 48 {
 				title = truncate(title, 48) + "…"
@@ -103,6 +108,25 @@ func buildReview(p PeriodReport) ReviewSummary {
 		if r.Headline == "" {
 			r.Headline = fmt.Sprintf("%s记录了 %d 项活动，暂不足以概括主线。", scope, len(p.Activities))
 		}
+	}
+	if p.UnknownSeconds > p.EstimatedSeconds && p.EstimatedSeconds > 0 {
+		r.Headline = "仅看已估时部分，" + r.Headline
+	}
+	if !hasTimedTask || p.EstimatedSeconds == 0 {
+		r.Advice = "目前缺少可估时的任务，先查看单帧和未估时记录、检查采集与整理状态；不要据此判断主要时间去向。"
+		return r
+	}
+	if p.PendingBatches > p.AnalyzedBatches {
+		r.Advice = "当前仍有较多记录待整理；先处理待整理或失败的批次，再比较主要任务和时段。"
+		return r
+	}
+	if (p.InterpolatedSeconds+p.InferredSeconds)*2 > p.EstimatedSeconds {
+		r.Advice = "当前时长主要来自关键帧插值或邻接推断；先核对记录内容和连续观察，再考虑调整日程。"
+		return r
+	}
+	if p.UnknownSeconds > p.EstimatedSeconds {
+		r.Advice = "当前未估时区间多于已估时部分；先查看这些区间及采集间隔，再决定是否调整日程。"
+		return r
 	}
 	var hours [24]int
 	for _, f := range p.Continuity.Fragments {

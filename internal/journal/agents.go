@@ -253,7 +253,7 @@ func (s *Store) analyzeAgent(ctx context.Context, id string, c Config, selected 
 	if !c.Agent.Enabled && selected == "" {
 		return errors.New("automatic agent analysis disabled")
 	}
-	b, err := s.PrepareAnalysis(id)
+	b, err := s.PreviewAnalysis(id)
 	if err != nil {
 		return err
 	}
@@ -262,34 +262,27 @@ func (s *Store) analyzeAgent(ctx context.Context, id string, c Config, selected 
 	}
 	parent := filepath.Join(s.Root, "jobs")
 	if err = os.MkdirAll(parent, 0700); err != nil {
-		return err
+		return &preparationError{"preparation_storage_failed"}
 	}
 	dir, err := os.MkdirTemp(parent, "analysis-")
 	if err != nil {
-		return err
+		return &preparationError{"preparation_storage_failed"}
 	}
 	defer os.RemoveAll(dir)
 	images := []string{}
 	var total int
 	for _, f := range b.Frames {
-		path, err := s.FramePath(f)
+		data, err := s.analysisImage(ctx, f)
 		if err != nil {
-			return errors.New("batch evidence unavailable")
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if err = checkFrameDigest(f, data); err != nil {
 			return err
 		}
 		total += len(data)
 		if total > 12<<20 {
-			return errors.New("batch images exceed 12 MiB")
+			return &preparationError{"evidence_size_limit"}
 		}
 		copyPath := filepath.Join(dir, f.ID+".jpg")
 		if err = s.saveJobImage(copyPath, data); err != nil {
-			return err
+			return &preparationError{"preparation_storage_failed"}
 		}
 		images = append(images, copyPath)
 	}
@@ -307,6 +300,12 @@ func (s *Store) analyzeAgent(ctx context.Context, id string, c Config, selected 
 		info := infos[name]
 		if !info.Installed || !info.Supported {
 			continue
+		}
+		if !attempted {
+			b, err = s.PrepareAnalysis(id)
+			if err != nil {
+				return err
+			}
 		}
 		reserved, reserveErr := s.reserveAttempt(id, c, time.Now(), attempted)
 		if reserveErr != nil {
