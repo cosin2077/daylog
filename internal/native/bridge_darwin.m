@@ -61,6 +61,14 @@ char *dg_environment(void) {
     }
 }
 
+static BOOL appBlocked(NSArray *blocked, NSString *app) {
+    if(!app.length) return NO;
+    for(NSString *candidate in blocked) {
+        if([[candidate stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] caseInsensitiveCompare:app]==NSOrderedSame) return YES;
+    }
+    return NO;
+}
+
 int dg_capture(int height,int quality,unsigned int windowID,const char *blockedJSON,void **bytes,int *length) {
     @autoreleasepool {
         pthread_set_qos_class_self_np(QOS_CLASS_UTILITY,0);
@@ -69,19 +77,19 @@ int dg_capture(int height,int quality,unsigned int windowID,const char *blockedJ
         NSArray *blocked=[NSJSONSerialization JSONObjectWithData:raw options:0 error:nil];
         if(![blocked isKindOfClass:NSArray.class])blocked=@[];
         NSString *app=frontmost();
-        if(blocked.count && (app.length==0 || [blocked containsObject:app]))return 4;
+        if(blocked.count && (app.length==0 || appBlocked(blocked,app)))return 4;
         dispatch_semaphore_t done=dispatch_semaphore_create(0);
         __block int result=3; __block NSData *jpeg=nil;
         [SCShareableContent getShareableContentExcludingDesktopWindows:NO onScreenWindowsOnly:YES completionHandler:^(SCShareableContent *content,NSError *error) {
             if(error || !content){dispatch_semaphore_signal(done);return;}
             NSString *current=frontmost();
-            if(blocked.count && (current.length==0 || [blocked containsObject:current])){result=4;dispatch_semaphore_signal(done);return;}
+            if(blocked.count && (current.length==0 || appBlocked(blocked,current))){result=4;dispatch_semaphore_signal(done);return;}
             SCDisplay *primary=nil;
             for(SCDisplay *display in content.displays){if(display.displayID==CGMainDisplayID()){primary=display;break;}}
             if(!primary || primary.width<=0 || primary.height<=0){result=5;dispatch_semaphore_signal(done);return;}
             NSMutableArray *excluded=[NSMutableArray array];
             for(SCRunningApplication *running in content.applications) {
-                if([blocked containsObject:running.bundleIdentifier] || [running.bundleIdentifier isEqualToString:@"io.daylog.agent"]) [excluded addObject:running];
+                if(appBlocked(blocked,running.bundleIdentifier) || [running.bundleIdentifier isEqualToString:@"io.daylog.agent"]) [excluded addObject:running];
             }
             SCContentFilter *filter=nil;
             double width=primary.width,sourceHeight=primary.height;
@@ -89,7 +97,7 @@ int dg_capture(int height,int quality,unsigned int windowID,const char *blockedJ
                 SCWindow *target=nil;
                 for(SCWindow *window in content.windows){if(window.windowID==windowID){target=window;break;}}
                 if(!target){result=5;dispatch_semaphore_signal(done);return;}
-                if([blocked containsObject:target.owningApplication.bundleIdentifier]){result=4;dispatch_semaphore_signal(done);return;}
+                if((blocked.count && (!target.owningApplication.bundleIdentifier.length || appBlocked(blocked,target.owningApplication.bundleIdentifier)))){result=4;dispatch_semaphore_signal(done);return;}
                 filter=[[SCContentFilter alloc] initWithDesktopIndependentWindow:target];
                 width=target.frame.size.width;sourceHeight=target.frame.size.height;
             } else {
@@ -102,6 +110,8 @@ int dg_capture(int height,int quality,unsigned int windowID,const char *blockedJ
             configuration.height=MAX(2,((int)(sourceHeight*scale)/2)*2);
             configuration.showsCursor=NO;configuration.scalesToFit=YES;
             [SCScreenshotManager captureImageWithFilter:filter configuration:configuration completionHandler:^(CGImageRef image,NSError *captureError) {
+                NSString *after=frontmost();
+                if(blocked.count && (after.length==0 || appBlocked(blocked,after))){result=4;dispatch_semaphore_signal(done);return;}
                 if(image && !captureError) {
                     pthread_set_qos_class_self_np(QOS_CLASS_UTILITY,0);
                     NSMutableData *data=[NSMutableData data];

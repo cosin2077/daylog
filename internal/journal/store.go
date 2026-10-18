@@ -218,7 +218,10 @@ func (s *Store) RawBytes() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	var size int64
+	size, err := s.jobBytes()
+	if err != nil {
+		return 0, err
+	}
 	for _, path := range files {
 		info, err := os.Lstat(path)
 		if err != nil {
@@ -484,6 +487,9 @@ func daysBetween(start, end time.Time) []string {
 // Pending and live draft evidence is protected. Unselected draft images become
 // orphans and are reclaimed after sealing, keeping the raw cap enforceable.
 func (s *Store) Cleanup(c Config, now time.Time) error {
+	if err := s.cleanupJobs(); err != nil {
+		return err
+	}
 	return s.locked(func() error {
 		protected := map[string]bool{}
 		pending, err := s.Pending(0)

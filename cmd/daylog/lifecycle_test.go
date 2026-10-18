@@ -19,10 +19,10 @@ func TestStartPreparesOnceAndRecoversPermissionOrPause(t *testing.T) {
 		running, paused, permissionLost, deny, failInstall bool
 		want                                               string
 	}{
-		{name: "first_run", want: "permission,install,launch"},
+		{name: "first_run", want: "permission,install,clear_pause,launch"},
 		{name: "already_running", running: true},
 		{name: "resume", running: true, paused: true, want: "resume"},
-		{name: "permission_refresh", running: true, permissionLost: true, want: "permission,stop,install,launch"},
+		{name: "permission_refresh", running: true, permissionLost: true, want: "permission,stop,install,clear_pause,launch"},
 		{name: "denied", deny: true, want: "permission"},
 		{name: "install_failed", failInstall: true, want: "permission,install"},
 	} {
@@ -30,6 +30,7 @@ func TestStartPreparesOnceAndRecoversPermissionOrPause(t *testing.T) {
 			running, paused, permissionLost := tc.running, tc.paused, tc.permissionLost
 			var calls []string
 			a := startActions{
+				clearPause: func() error { calls = append(calls, "clear_pause"); paused = false; return nil },
 				permission: func(context.Context, string) error {
 					calls = append(calls, "permission")
 					if tc.deny {
@@ -107,13 +108,20 @@ func TestRuntimeReadyWaitsForPublishedStatus(t *testing.T) {
 			return journal.Status{}, nil
 		}
 		return journal.Status{PID: 42, UpdatedAt: time.Now()}, nil
-	})
+	}, false)
 	if err != nil || calls != 3 || status.PID != 42 {
 		t.Fatal("accepted launch acknowledgement before daemon readiness")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err = waitRuntimeReady(ctx, func() (journal.Status, error) { return journal.Status{}, errors.New("not started") }); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err = waitRuntimeReady(ctx, func() (journal.Status, error) { return journal.Status{}, errors.New("not started") }, false); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("failed launch was reported as restarted")
+	}
+}
+
+func TestRuntimeReadyAcceptsPreservedPause(t *testing.T) {
+	status, err := waitRuntimeReady(context.Background(), func() (journal.Status, error) { return journal.Status{Paused: true, UpdatedAt: time.Now()}, nil }, true)
+	if err != nil || !status.Paused {
+		t.Fatal(status, err)
 	}
 }

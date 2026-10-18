@@ -17,7 +17,7 @@ import (
 	"strings"
 )
 
-func installWindows(ctx context.Context, source, currentExe, currentVersion string, force bool, beforeSwap func() error) (Check, error) {
+func installWindows(ctx context.Context, source, currentExe, currentVersion string, force bool, beforeSwap, afterSwap func() error) (Check, error) {
 	feed, check, e := Inspect(ctx, source, currentVersion)
 	if e != nil || !force && !check.Upgrade {
 		return check, e
@@ -123,6 +123,9 @@ func installWindows(ctx context.Context, source, currentExe, currentVersion stri
 			return check, errors.New("replacement and rollback failed; previous.exe retained in update directory")
 		}
 		return check, errors.New("replacement failed; previous executable restored")
+	}
+	if afterSwap != nil {
+		return check, afterSwap()
 	}
 	return check, nil
 }

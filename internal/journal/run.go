@@ -60,10 +60,16 @@ func (r *Runner) Run(ctx context.Context) error {
 		return errors.New("Daylog is already running")
 	}
 	defer platform.Unlock(lock)
+	if err = r.Store.cleanupJobs(); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	r.wake = make(chan struct{}, 1)
 	r.status = Status{PID: os.Getpid(), StartedAt: time.Now().UTC()}
+	if err = r.restorePause(time.Now()); err != nil {
+		return err
+	}
 	if err = ReadJSON(filepath.Join(r.Store.Root, "draft.json"), &r.draft); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return errors.New("draft recovery failed")
 	}
@@ -125,24 +131,40 @@ func (r *Runner) serve(ctx context.Context, listener net.Listener, cancel contex
 					break
 				}
 				r.paused = true
+				r.canAnalyze = false
+				if r.analysisCancel != nil {
+					r.analysisCancel()
+				}
 				r.pauseUntil = time.Now().Add(time.Duration(command.Minutes) * time.Minute)
 				r.status.Paused = true
 				until := r.pauseUntil.UTC()
 				r.status.PauseUntil = &until
+				if saveErr := r.Store.SavePause(true, &until); saveErr != nil {
+					err = errors.New("本次暂停已生效，但无法保存重启后的暂停状态；请检查数据目录权限")
+				}
 			case "resume":
+				if saveErr := r.Store.SavePause(false, nil); saveErr != nil {
+					err = errors.New("无法保存恢复状态，记录仍暂停；请检查数据目录权限")
+					break
+				}
 				r.paused = false
 				r.pauseUntil = time.Time{}
 				r.status.Paused = false
 				r.status.PauseUntil = nil
 			case "stop":
+				r.canAnalyze = false
 				cancel()
 			default:
-				err = errors.New("unsupported control operation")
+				err = errors.New("不支持的控制操作")
 			}
 			r.mu.Unlock()
 		}
 		if err != nil {
-			_ = json.NewEncoder(conn).Encode(map[string]string{"control_error": "控制请求无效；暂停时长须为 1–1440 分钟"})
+			message := err.Error()
+			if command.Op == "" {
+				message = "控制请求无效"
+			}
+			_ = json.NewEncoder(conn).Encode(map[string]string{"control_error": message})
 		} else {
 			_ = json.NewEncoder(conn).Encode(r.snapshot())
 		}
@@ -182,6 +204,13 @@ func (r *Runner) setError(reason string) { r.mu.Lock(); r.status.Error = reason;
 func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 	env, err := r.Source.Environment(ctx)
 	if err != nil {
+		r.mu.Lock()
+		r.canAnalyze = false
+		activeCancel := r.analysisCancel
+		r.mu.Unlock()
+		if activeCancel != nil {
+			activeCancel()
+		}
 		r.noteState(now, "environment_unavailable", "")
 		r.setError("environment_unavailable")
 		return time.Minute
@@ -309,6 +338,12 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		r.setError("capture_unavailable_check_permission")
 		return p.Delay
 	}
+	after, environmentErr := r.Source.Environment(ctx)
+	if environmentErr != nil || after.Locked || after.ScreenOff || !after.Permission || (r.Config.WindowID == 0 && after.App != env.App) {
+		r.noteState(now, "capture_unavailable", "")
+		r.setError("capture_unavailable_check_permission")
+		return p.Delay
+	}
 	r.mu.Lock()
 	interrupted := r.paused
 	r.mu.Unlock()
@@ -340,7 +375,15 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		}
 		return p.Delay
 	}
+	// Serialize the final evidence write with pause acknowledgement. A pause
+	// arriving during JPEG processing must not leave a new raw frame behind.
+	r.mu.Lock()
+	if r.paused || ctx.Err() != nil {
+		r.mu.Unlock()
+		return p.Delay
+	}
 	frame, err := r.Store.SaveFrame(now, app, data, r.Config)
+	r.mu.Unlock()
 	if err != nil {
 		r.setError("raw_storage_full_or_write_failed")
 		return p.Delay
@@ -472,6 +515,11 @@ func (r *Runner) analysisLoop(ctx context.Context) {
 		}
 		workCtx, cancel := context.WithCancel(ctx)
 		r.mu.Lock()
+		if r.paused || !r.canAnalyze || ctx.Err() != nil {
+			r.mu.Unlock()
+			cancel()
+			continue
+		}
 		r.analysisCancel = cancel
 		r.status.AnalysisState = "running"
 		r.status.AnalysisBatch = b.ID

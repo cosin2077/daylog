@@ -121,7 +121,7 @@ func TestValidAdHocSignatureCannotReplacePinnedRelease(t *testing.T) {
 	manifest := filepath.Join(dir, "release.json")
 	os.WriteFile(manifest, raw, 0600)
 	stopped := false
-	_, err = Install(context.Background(), manifest, app, "8.0.0", false, func() error { stopped = true; return nil })
+	_, err = Install(context.Background(), manifest, app, "8.0.0", false, func() error { stopped = true; return nil }, nil)
 	if err == nil || !strings.Contains(err.Error(), "publisher") || stopped {
 		t.Fatalf("wrong signer reached replacement: %v stopped=%v", err, stopped)
 	}
@@ -169,7 +169,7 @@ func TestChecksumFailureNeverStopsRunningApp(t *testing.T) {
 	app := filepath.Join(dir, "Daylog.app")
 	os.Mkdir(app, 0700)
 	called := false
-	_, err := Install(context.Background(), manifest, app, "0.1.0", false, func() error { called = true; return nil })
+	_, err := Install(context.Background(), manifest, app, "0.1.0", false, func() error { called = true; return nil }, nil)
 	if err == nil || called {
 		t.Fatal("invalid update reached recording stop/replacement")
 	}

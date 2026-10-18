@@ -66,6 +66,7 @@ type TimeBucket struct {
 }
 
 type PeriodReport struct {
+	AxisTicks          []time.Time       `json:"axis_ticks,omitempty"`
 	Rhythm             []RhythmBlock     `json:"rhythm,omitempty"`
 	InferredSeconds    int64             `json:"inferred_seconds"`
 	Comparison         *PeriodComparison `json:"comparison,omitempty"`
@@ -130,7 +131,8 @@ func (s *Store) Overview(anchor time.Time) (Overview, error) {
 	err := s.locked(func() error {
 		start, end, _ := PeriodBounds("month", anchor)
 		start = start.AddDate(0, -2, 0)
-		weekStart, weekEnd, _ := PeriodBounds("week", anchor)
+		weekStart, _, _ := PeriodBounds("week", anchor)
+		_, weekEnd, _ := PeriodBounds("week", end.AddDate(0, 0, -1))
 		if weekStart.Before(start) {
 			start = weekStart
 		}
@@ -171,7 +173,8 @@ func BuildOverview(anchor time.Time, reports []Report, pending []Batch, draft Ba
 	start = start.AddDate(0, -1, 0)
 	navigationMonthStart := start
 	start, _, _ = PeriodBounds("week", start)
-	weekStart, weekEnd, _ := PeriodBounds("week", anchor)
+	weekStart, _, _ := PeriodBounds("week", anchor)
+	_, weekEnd, _ := PeriodBounds("week", end.AddDate(0, 0, -1))
 	if weekStart.Before(start) {
 		start = weekStart
 	}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
+	"daylog/internal/platform"
 	"debug/macho"
 	_ "embed"
 	"encoding/hex"
@@ -152,9 +153,9 @@ func artifactSource(manifest, artifact string) (string, error) {
 
 // Validation is complete before the caller stops recording. The two renames
 // preserve an app backup until replacement succeeds, on the same filesystem.
-func Install(ctx context.Context, source, currentApp, currentVersion string, force bool, beforeSwap func() error) (Check, error) {
+func Install(ctx context.Context, source, currentApp, currentVersion string, force bool, beforeSwap, afterSwap func() error) (Check, error) {
 	if runtime.GOOS == "windows" {
-		return installWindows(ctx, source, currentApp, currentVersion, force, beforeSwap)
+		return installWindows(ctx, source, currentApp, currentVersion, force, beforeSwap, afterSwap)
 	}
 	feed, check, err := Inspect(ctx, source, currentVersion)
 	if err != nil {
@@ -169,6 +170,15 @@ func Install(ctx context.Context, source, currentApp, currentVersion string, for
 	if !strings.HasSuffix(currentApp, ".app") {
 		return check, errors.New("updates require an installed app bundle")
 	}
+	lock, err := os.OpenFile(filepath.Join(filepath.Dir(currentApp), ".daylog-update.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return check, err
+	}
+	defer lock.Close()
+	if err = platform.TryLock(lock); err != nil {
+		return check, errors.New("另一个更新正在进行，请稍后重试")
+	}
+	defer platform.Unlock(lock)
 	temp, err := os.MkdirTemp(filepath.Dir(currentApp), ".daylog-update-")
 	if err != nil {
 		return check, err
@@ -225,6 +235,9 @@ func Install(ctx context.Context, source, currentApp, currentVersion string, for
 			return check, errors.New("replacement and rollback failed; app backup retained in update staging directory")
 		}
 		return check, errors.New("replacement failed; installed app restored")
+	}
+	if afterSwap != nil {
+		return check, afterSwap()
 	}
 	return check, nil
 }

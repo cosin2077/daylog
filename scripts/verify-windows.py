@@ -56,7 +56,7 @@ try:
     installer(install,feed,shell='powershell.exe')
     cli('init')
     config=data/'config.json'
-    c=json.loads(config.read_text(encoding='utf-8'));c['agent']['enabled']=False;c['ai']['enabled']=False;c['update']['source']=str(feed)
+    c=json.loads(config.read_text(encoding='utf-8'));assert c['update']['source']=='https://github.com/cosin2077/daylog/releases/latest/download/release.json';c['agent']['enabled']=False;c['ai']['enabled']=False;c['update']['source']=str(feed)
     config.write_text(json.dumps(c),encoding='utf-8');config_before=config.read_bytes()
     result['install_and_help']=version
     fixture=root/'synthetic.jpg';run(['go','run','./scripts/fixture',fixture])

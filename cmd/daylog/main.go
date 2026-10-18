@@ -335,7 +335,7 @@ func executeCommand(args []string) error {
 			*source = c.Update.Source
 		}
 		if *source == "" {
-			return errors.New("update source is not configured; use --source <release.json URL or file>")
+			*source = journal.DefaultUpdateSource
 		}
 		var check update.Check
 		err = withProgress(!*asJSON, "正在检查更新", func() error { var e error; _, check, e = update.Inspect(ctx, *source, version); return e })
@@ -372,41 +372,56 @@ func executeCommand(args []string) error {
 			app = exe
 		}
 		wasRunning := false
-		wasService := service.IsLoaded(s.Root)
+		restarted := false
+		wasService := false
 		err = withProgress(!*asJSON, "正在下载、校验并安装更新", func() error {
 			var installErr error
 			check, installErr = update.Install(ctx, *source, app, version, *force, func() error {
-				if _, probe := journal.SendControl(s.Root, journal.Control{Op: "status"}); probe != nil {
+				wasService = service.IsLoaded(s.Root)
+				previous, probe := journal.SendControl(s.Root, journal.Control{Op: "status"})
+				if probe != nil {
+					stopped, err := recorderStopped(s.Root)
+					if err != nil {
+						return err
+					}
+					if !stopped || wasService {
+						return errors.New("记录进程仍在运行但控制接口未就绪，请稍后重试更新")
+					}
 					return nil
+				}
+				if err := s.SavePause(previous.Paused, previous.PauseUntil); err != nil {
+					return err
 				}
 				wasRunning = true
 				// Unload the LaunchAgent and wait for the daemon lock. A socket
 				// disappearing does not prove launchd has reaped the exiting process;
 				// kickstart during that gap can succeed without launching a replacement.
 				return stopRuntime(ctx, s.Root)
+			}, func() error {
+				if wasRunning && wasService {
+					home, _ := os.UserHomeDir()
+					if err = service.Start(home, s.Root); err != nil {
+						return errors.New("应用已更新，但后台重启失败；原暂停状态已保留")
+					}
+					if _, err = waitRuntimeReady(ctx, func() (journal.Status, error) { return journal.SendControl(s.Root, journal.Control{Op: "status"}) }, true); err != nil {
+						return errors.New("应用已更新，但后台未就绪；原暂停状态已保留，请运行 daylog doctor 检查")
+					}
+					restarted = true
+				}
+				return nil
 			})
 			return installErr
 		})
 		if err != nil {
 			return err
 		}
-		restarted := false
-		if wasRunning && wasService {
-			home, _ := os.UserHomeDir()
-			if err = service.Start(home, s.Root); err != nil {
-				return errors.New("app updated; background restart failed")
-			}
-			if _, err = waitRuntimeReady(ctx, func() (journal.Status, error) { return journal.SendControl(s.Root, journal.Control{Op: "status"}) }); err != nil {
-				return errors.New("应用已更新，但后台未就绪；运行 daylog start 恢复，或查看 ~/.daylog/daemon.log")
-			}
-			restarted = true
-		}
+
 		if *asJSON {
 			return output(map[string]any{"state": "updated", "version": check.Available, "restarted": restarted, "manual_restart_needed": wasRunning && !wasService})
 		}
 		fmt.Printf("已更新至 %s。\n", check.Available)
 		if wasRunning {
-			fmt.Println("更新后如需确认录屏授权，运行 daylog start。")
+			fmt.Println("更新已保留原暂停状态；运行 daylog status 查看，恢复记录请用 daylog resume。")
 		}
 		return nil
 	case "run":

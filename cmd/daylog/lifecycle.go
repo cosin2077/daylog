@@ -116,6 +116,7 @@ type startActions struct {
 	status     func() (journal.Status, error)
 	resume     func() error
 	stop       func() error
+	clearPause func() error
 }
 
 // The same entry point handles a first run, an already running daemon and a
@@ -143,21 +144,26 @@ func startWith(ctx context.Context, root string, a startActions) (journal.Status
 		if err := a.install(); err != nil {
 			return journal.Status{}, err
 		}
+		if a.clearPause != nil {
+			if err := a.clearPause(); err != nil {
+				return journal.Status{}, err
+			}
+		}
 		if err := a.launch(); err != nil {
 			return journal.Status{}, err
 		}
 	}
-	return waitRuntimeReady(ctx, a.status)
+	return waitRuntimeReady(ctx, a.status, false)
 }
 
 // A launchctl success is only a request acknowledgement. Require the new
 // daemon to publish its first status before reporting a successful restart.
-func waitRuntimeReady(ctx context.Context, probe func() (journal.Status, error)) (journal.Status, error) {
+func waitRuntimeReady(ctx context.Context, probe func() (journal.Status, error), allowPaused bool) (journal.Status, error) {
 	deadline := time.NewTimer(15 * time.Second)
 	defer deadline.Stop()
 	for {
 		status, err := probe()
-		if err == nil && !status.Paused && !status.UpdatedAt.IsZero() {
+		if err == nil && (allowPaused || !status.Paused) && !status.UpdatedAt.IsZero() {
 			return status, nil
 		}
 		select {
@@ -184,6 +190,7 @@ func startRecording(ctx context.Context, s *journal.Store, login, asJSON bool) e
 	}
 	status, err := startWith(ctx, s.Root, startActions{
 		permission: ensurePermission,
+		clearPause: func() error { return s.SavePause(false, nil) },
 		install: func() error {
 			_, err := service.Install(home, s.Root, exe, login || service.StartsAtLogin(home, s.Root))
 			return err

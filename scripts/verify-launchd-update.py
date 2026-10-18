@@ -31,12 +31,12 @@ def run(args, timeout=30):
 def cli(*args, **kwargs):
     return run([exe, "--data", data, *args], **kwargs)
 
-def ready():
+def ready(paused=False):
     until = time.monotonic() + 15
     while time.monotonic() < until:
         try:
             status = json.loads(cli("status", "--json"))
-            if status.get("saved_frames", 0) > 0:
+            if status.get("updated_at") and status.get("paused") == paused and (paused or status.get("saved_frames", 0) > 0):
                 return status
         except RuntimeError:
             pass
@@ -59,15 +59,24 @@ try:
     cli("service", "start")
     before = ready()
     digest = hashlib.sha256((data / "config.json").read_bytes()).hexdigest()
-    for _ in range(2):
+    for paused in (False, True, False):
+        if paused:
+            cli("pause", "--minutes", "30")
+        elif before.get("paused"):
+            cli("resume")
+        before = ready(paused)
+        pause_until = before.get("pause_until")
         result = json.loads(cli("update", "--force", "--json", timeout=60))
         assert result["state"] == "updated" and result["restarted"]
-        after = ready()
+        after = ready(paused)
+        if paused:
+            assert after["saved_frames"] == 0, "update captured before restoring pause"
+            assert after["pause_until"] == pause_until, "update lost pause deadline"
         assert after["pid"] != before["pid"], "old PID survived update"
         assert after["started_at"] > before["started_at"], "old status mistaken for restart"
         assert hashlib.sha256((data / "config.json").read_bytes()).hexdigest() == digest
         before = after
-    print("PASS: two real LaunchAgent update swaps, new PIDs, published status, fixture capture and unchanged config")
+    print("PASS: three real LaunchAgent update swaps, preserved pause before first capture, new PIDs, published status and unchanged config")
 finally:
     if plist is not None:
         label = plist.stem

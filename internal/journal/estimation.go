@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const estimationVersion = "bounded_neighbors_v2"
+const estimationVersion = "bounded_neighbors_v3"
 
 // Estimate only inside adjacent, bounded observations. Inferred spans are kept
 // separate from continuous observation evidence and never extend beyond a pair.
@@ -18,10 +18,32 @@ func estimateReport(input Report) Report {
 	r.Cards = append([]Card(nil), input.Cards...)
 	var occupied []TimeSpan
 	for i := range r.Cards {
-		r.Cards[i].Spans = append([]TimeSpan(nil), input.Cards[i].Spans...)
+		r.Cards[i].Spans = nil
+		for _, part := range input.Cards[i].Spans {
+			if !part.Inferred {
+				r.Cards[i].Spans = append(r.Cards[i].Spans, part)
+			}
+		}
 		occupied = append(occupied, r.Cards[i].Spans...)
 	}
-	points := uniqueObservations(input.TaskObservations)
+	observations := append([]TaskObservation(nil), input.TaskObservations...)
+	if input.EstimationVersion != "" {
+		// Old versions erased low-confidence labels. Without restored archive
+		// evidence an empty sample cannot safely be treated as unidentified.
+		hasLow := false
+		for _, card := range input.Cards {
+			hasLow = hasLow || card.Confidence == "low"
+		}
+		if hasLow {
+			for i := range observations {
+				if observations[i].State == "sampled" && observations[i].TaskID == "" {
+					observations[i].State = "uncertain"
+				}
+			}
+		}
+	}
+	r.TaskObservations = observations
+	points := uniqueObservations(observations)
 	cardAt := func(p TaskObservation) int {
 		if p.TaskID == "" || p.At.Before(r.Start) || p.At.After(r.End) {
 			return -1
@@ -48,7 +70,6 @@ func estimateReport(input Report) Report {
 		}
 		return best
 	}
-	added := false
 	add := func(index int, from, to time.Time) {
 		if index < 0 {
 			return
@@ -70,7 +91,6 @@ func estimateReport(input Report) Report {
 			if gap.End.After(c.End) {
 				c.End = gap.End
 			}
-			added = true
 		}
 	}
 	// A single recorded app activation provides a better boundary than the
@@ -134,9 +154,6 @@ func estimateReport(input Report) Report {
 			add(right, middle, b.At)
 		}
 	}
-	if !added {
-		return input
-	}
 	r.EstimationVersion = estimationVersion
 	for i := range r.Cards {
 		c := &r.Cards[i]
@@ -150,6 +167,7 @@ func estimateReport(input Report) Report {
 		}
 		c.EstimatedSeconds = covered(all)
 		c.InferredSeconds = covered(inferred)
+		c.DurationMethod = "bounded_observation_v1"
 		if c.InferredSeconds > 0 {
 			c.DurationMethod = estimationVersion
 		}

@@ -288,7 +288,7 @@ func (s *Store) analyzeAgent(ctx context.Context, id string, c Config, selected 
 			return errors.New("batch images exceed 12 MiB")
 		}
 		copyPath := filepath.Join(dir, f.ID+".jpg")
-		if err = os.WriteFile(copyPath, data, 0600); err != nil {
+		if err = s.saveJobImage(copyPath, data); err != nil {
 			return err
 		}
 		images = append(images, copyPath)

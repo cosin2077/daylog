@@ -152,6 +152,13 @@ func (s *Store) analyzeAPI(ctx context.Context, id string, c Config, key string,
 
 	response, err := safeClient.Do(httpRequest)
 	if err != nil {
+		if ctx.Err() != nil {
+			event.ErrorKind = "canceled"
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				event.ErrorKind = "timeout"
+			}
+			return ctx.Err()
+		}
 		event.ErrorKind = "network_or_timeout"
 		event.Error = err.Error()
 		if ctx.Err() == context.DeadlineExceeded {
@@ -163,6 +170,13 @@ func (s *Store) analyzeAPI(ctx context.Context, id string, c Config, key string,
 	event.HTTPStatus = response.StatusCode
 	body, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 	event.Response = string(body)
+	if ctx.Err() != nil {
+		event.ErrorKind = "canceled"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			event.ErrorKind = "timeout"
+		}
+		return ctx.Err()
+	}
 	if err != nil || len(body) > 1<<20 {
 		event.ErrorKind = "response_size"
 		return errors.New("AI response is unreadable or too large")
@@ -193,6 +207,13 @@ func (s *Store) analyzeAPI(ctx context.Context, id string, c Config, key string,
 	if envelope.Choices[0].FinishReason != "stop" {
 		event.ErrorKind = "incomplete_response"
 		return errors.New("AI response did not finish; partial output was rejected")
+	}
+	if err = ctx.Err(); err != nil {
+		event.ErrorKind = "canceled"
+		if errors.Is(err, context.DeadlineExceeded) {
+			event.ErrorKind = "timeout"
+		}
+		return err
 	}
 	if err = s.CommitAnalysis(id, []byte(envelope.Choices[0].Message.Content), "api", c.AI.Model); err != nil {
 		event.ErrorKind = "invalid_report"

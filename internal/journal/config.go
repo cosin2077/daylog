@@ -73,11 +73,14 @@ type AIConfig struct {
 	MaxRequestsPerDay   int      `json:"max_requests_per_day"`
 }
 
+const DefaultUpdateSource = "https://github.com/cosin2077/daylog/releases/latest/download/release.json"
+
 func DefaultConfig() Config {
 	return Config{IntervalSeconds: 30, Height: 720, Quality: 60, IdleSeconds: 300,
 		MinSaveSeconds: 90, HeartbeatSeconds: 300, ChangeThreshold: 0.005,
 		BatchSeconds: 900, TargetImages: 4, MaxImages: 8, MaxGapSeconds: 300, MaxImagesPerDay: 1536, RawRetentionDays: 3, ReportRetentionDays: 90, MaxStorageBytes: 256 << 20,
 		MaxPendingBatches: 96, BlockedApps: []string{},
+		Update:      UpdateConfig{Source: DefaultUpdateSource},
 		Power:       PowerConfig{BatteryIntervalSeconds: 120, LowPowerIntervalSeconds: 180, PauseBelowPercent: 20},
 		Agent:       AgentConfig{Effort: "low", Enabled: true, Order: []string{"claude", "codex", "hermes"}, TimeoutSeconds: 180, InheritLoginEnv: true},
 		Diagnostics: DiagnosticsConfig{FailureNotifications: true, Enabled: true, RetentionDays: 7, MaxBytes: 32 << 20},

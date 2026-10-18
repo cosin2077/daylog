@@ -21,6 +21,9 @@ func (s *Store) analysisRound(ctx context.Context, id string, notifications bool
 		return errors.New("another analysis is running")
 	}
 	defer platform.Unlock(lock)
+	if err = s.removeAbandonedJobs(); err != nil {
+		return err
+	}
 	err = call()
 	if err != nil && ctx.Err() == nil && !errors.Is(err, ErrDailyBudget) && !errors.Is(err, ErrRetryCooling) {
 		if b, readErr := s.Batch(id); readErr == nil && b.LastError != "" {

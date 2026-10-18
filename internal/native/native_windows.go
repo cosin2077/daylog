@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -49,6 +50,63 @@ var enumWindows = user32.NewProc("EnumWindows")
 var windowVisible = user32.NewProc("IsWindowVisible")
 var windowIconic = user32.NewProc("IsIconic")
 var windowText = user32.NewProc("GetWindowTextW")
+var windowRect = user32.NewProc("GetWindowRect")
+
+// NewCallback allocates a runtime slot that cannot be freed. Reuse one callback
+// for frequent capture checks instead of allocating two slots per screenshot.
+var windowEnumerationMu sync.Mutex
+var windowVisitor func(uintptr) bool
+var windowEnumerationCallback = windows.NewCallback(func(hwnd, unused uintptr) uintptr {
+	if windowVisitor(hwnd) {
+		return 1
+	}
+	return 0
+})
+
+func visitWindows(visitor func(uintptr) bool) error {
+	windowEnumerationMu.Lock()
+	defer windowEnumerationMu.Unlock()
+	stopped := false
+	windowVisitor = func(hwnd uintptr) bool {
+		if !visitor(hwnd) {
+			stopped = true
+			return false
+		}
+		return true
+	}
+	defer func() { windowVisitor = nil }()
+	if ok, _, _ := enumWindows.Call(windowEnumerationCallback, 0); ok == 0 && !stopped {
+		return errors.New("window enumeration failed")
+	}
+	return nil
+}
+
+func visiblePrivacyWindows() ([]privacyWindow, error) {
+	var list []privacyWindow
+	err := visitWindows(func(hwnd uintptr) bool {
+		visible, _, _ := windowVisible.Call(hwnd)
+		minimized, _, _ := windowIconic.Call(hwnd)
+		if visible == 0 || minimized != 0 {
+			return true
+		}
+		r := struct{ Left, Top, Right, Bottom int32 }{}
+		ok, _, _ := windowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
+		list = append(list, privacyWindow{App: windowApp(hwnd), Bounds: image.Rect(int(r.Left), int(r.Top), int(r.Right), int(r.Bottom)), BoundsKnown: ok != 0})
+		return true
+	})
+	return list, err
+}
+
+func inspectCapturePrivacy(region image.Rectangle, blocked []string) error {
+	if len(blocked) == 0 {
+		return nil
+	}
+	windows, err := visiblePrivacyWindows()
+	if err != nil {
+		return ErrBlocked
+	}
+	return checkCapturePrivacy(region, windows, blocked)
+}
 
 func windowApp(hwnd uintptr) string {
 	var pid uint32
@@ -140,10 +198,8 @@ func captureAllowed(env Environment, blocked []string) error {
 	if env.App == "" {
 		return errors.New("foreground application unavailable")
 	}
-	for _, b := range blocked {
-		if strings.EqualFold(b, env.App) {
-			return ErrBlocked
-		}
+	if blockedApplication(env.App, blocked) {
+		return ErrBlocked
 	}
 	return nil
 }
@@ -193,6 +249,10 @@ func (d Desktop) Capture(ctx context.Context, opts CaptureOptions) ([]byte, erro
 	}
 	if w <= 0 || h <= 0 || w > 32768 || h > 32768 {
 		return nil, errors.New("screen dimensions unavailable")
+	}
+	region := image.Rect(int(x), int(y), int(x)+w, int(y)+h)
+	if err := inspectCapturePrivacy(region, opts.Blocked); err != nil {
+		return nil, err
 	}
 	outh := min(h, opts.Height)
 	outw := max(1, w*outh/h)
@@ -247,6 +307,22 @@ func (d Desktop) Capture(ctx context.Context, opts CaptureOptions) ([]byte, erro
 	if after.App != env.App {
 		return nil, errors.New("foreground changed during capture")
 	}
+	if opts.WindowID != 0 {
+		fg, _, _ := foreground.Call()
+		if fg != uintptr(opts.WindowID) {
+			return nil, errors.New("selected window changed during capture")
+		}
+		r := struct{ Left, Top, Right, Bottom int32 }{}
+		point := struct{ X, Y int32 }{}
+		ok, _, _ := clientRect.Call(fg, uintptr(unsafe.Pointer(&r)))
+		position, _, _ := clientToScreen.Call(fg, uintptr(unsafe.Pointer(&point)))
+		if ok == 0 || position == 0 || point.X != x || point.Y != y || int(r.Right-r.Left) != w || int(r.Bottom-r.Top) != h {
+			return nil, errors.New("selected window moved during capture")
+		}
+	}
+	if err := inspectCapturePrivacy(region, opts.Blocked); err != nil {
+		return nil, err
+	}
 	raw := unsafe.Slice((*byte)(pixels), outw*outh*4)
 	im := image.NewRGBA(image.Rect(0, 0, outw, outh))
 	for i := 0; i < len(raw); i += 4 {
@@ -263,25 +339,25 @@ func Windows() ([]Window, error) {
 		return nil, errors.New("interactive desktop unavailable")
 	}
 	var list []Window
-	cb := windows.NewCallback(func(hwnd, unused uintptr) uintptr {
+	err := visitWindows(func(hwnd uintptr) bool {
 		visible, _, _ := windowVisible.Call(hwnd)
 		if visible == 0 {
-			return 1
+			return true
 		}
 		app := windowApp(hwnd)
 		if app == "" {
-			return 1
+			return true
 		}
 		text := make([]uint16, 512)
 		n, _, _ := windowText.Call(hwnd, uintptr(unsafe.Pointer(&text[0])), uintptr(len(text)))
 		if n == 0 {
-			return 1
+			return true
 		}
 		list = append(list, Window{ID: uint32(hwnd), App: app, Title: windows.UTF16ToString(text)})
-		return 1
+		return true
 	})
-	if ok, _, _ := enumWindows.Call(cb, 0); ok == 0 {
-		return nil, errors.New("window enumeration failed")
+	if err != nil {
+		return nil, err
 	}
 	return list, nil
 }
