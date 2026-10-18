@@ -11,8 +11,8 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		panic("usage: go run ./scripts/report-demo OUTPUT.html")
+	if len(os.Args) != 2 && !(len(os.Args) == 3 && os.Args[2] == "--failure") {
+		panic("usage: go run ./scripts/report-demo OUTPUT.html [--failure]")
 	}
 	now := time.Now()
 	anchor := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, time.Local)
@@ -87,6 +87,10 @@ func main() {
 		TaskObservations: []journal.TaskObservation{{At: previous, State: "sampled", App: "com.apple.Notes", TaskID: "demo-prior", MaxGapSeconds: 120}, {At: previousEnd, State: "sampled", App: "com.apple.Notes", TaskID: "demo-prior", MaxGapSeconds: 120}},
 	})
 	pending := []journal.Batch{{Start: anchor.Add(17 * time.Hour), End: anchor.Add(17*time.Hour + 15*time.Minute)}}
+	if len(os.Args) == 3 {
+		attempt := anchor.Add(18 * time.Hour)
+		pending = append(pending, journal.Batch{ID: journal.ID(attempt), Start: attempt, End: attempt.Add(15 * time.Minute), LastError: "claude:timeout", Attempts: 2, FailureRounds: 2, LastAttempt: &attempt})
+	}
 	o := journal.BuildOverview(anchor, reports, pending, journal.Batch{})
 	o.Sample = true
 	data, err := journal.RenderHTML(o, "day")
