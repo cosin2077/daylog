@@ -11,8 +11,8 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 && !(len(os.Args) == 3 && os.Args[2] == "--failure") {
-		panic("usage: go run ./scripts/report-demo OUTPUT.html [--failure]")
+	if len(os.Args) != 2 && !(len(os.Args) == 3 && (os.Args[2] == "--failure" || os.Args[2] == "--unrecognized" || os.Args[2] == "--interpolated")) {
+		panic("usage: go run ./scripts/report-demo OUTPUT.html [--failure|--unrecognized|--interpolated]")
 	}
 	now := time.Now()
 	anchor := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, time.Local)
@@ -87,11 +87,23 @@ func main() {
 		TaskObservations: []journal.TaskObservation{{At: previous, State: "sampled", App: "com.apple.Notes", TaskID: "demo-prior", MaxGapSeconds: 120}, {At: previousEnd, State: "sampled", App: "com.apple.Notes", TaskID: "demo-prior", MaxGapSeconds: 120}},
 	})
 	pending := []journal.Batch{{Start: anchor.Add(17 * time.Hour), End: anchor.Add(17*time.Hour + 15*time.Minute)}}
-	if len(os.Args) == 3 {
+	if len(os.Args) == 3 && os.Args[2] == "--failure" {
 		attempt := anchor.Add(18 * time.Hour)
 		pending = append(pending, journal.Batch{ID: journal.ID(attempt), Start: attempt, End: attempt.Add(15 * time.Minute), LastError: "claude:timeout", Attempts: 2, FailureRounds: 2, LastAttempt: &attempt})
 	}
 	o := journal.BuildOverview(anchor, reports, pending, journal.Batch{})
+	if len(os.Args) == 3 && os.Args[2] != "--failure" {
+		from := anchor.Add(9 * time.Hour)
+		until := from.Add(3 * time.Minute)
+		r := journal.Report{SchemaVersion: 2, AppSource: "synthetic_review", BatchID: journal.ID(from), Start: from, End: until, Cards: []journal.Card{}, UnknownSpans: []journal.TimeSpan{{Start: from, End: until}}, UnknownSeconds: 180}
+		if os.Args[2] == "--interpolated" {
+			r.UnknownSpans = nil
+			r.UnknownSeconds = 0
+			r.Cards = []journal.Card{{TaskID: "review-task", Title: "同一任务的两张关键帧", Summary: "中间的新截图未送模型辨认；这里保留有界插值。", Category: "写代码", Confidence: "medium", Start: from, End: until, EstimatedSeconds: 180, Spans: []journal.TimeSpan{{Start: from, End: until, Interpolated: true}}}}
+			r.TaskObservations = []journal.TaskObservation{{At: from, App: "editor", TaskID: "review-task", State: "sampled", MaxGapSeconds: 180}, {At: until, App: "editor", TaskID: "review-task", State: "sampled", MaxGapSeconds: 180}}
+		}
+		o = journal.BuildOverview(anchor, []journal.Report{r}, nil, journal.Batch{})
+	}
 	o.Sample = true
 	data, err := journal.RenderHTML(o, "day")
 	if err != nil {
