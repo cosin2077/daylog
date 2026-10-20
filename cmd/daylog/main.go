@@ -15,12 +15,13 @@ import (
 
 	"daylog/internal/journal"
 	"daylog/internal/native"
+	"daylog/internal/notion"
 	"daylog/internal/platform"
 	"daylog/internal/service"
 	"daylog/internal/update"
 )
 
-var version = "0.9.0"
+var version = "0.10.0"
 
 const help = `Daylog — 自动记录今天做了什么
 
@@ -30,6 +31,7 @@ const help = `Daylog — 自动记录今天做了什么
   daylog status   查看运行状态和待整理记录
   daylog stop     停止记录
   daylog config   查看或配置模型（可选，使用 config -h 查看方法）
+  daylog notion   配置每日 Notion 同步（可选）
   daylog update   更新版本
   daylog -h       显示帮助（直接运行 daylog 也可以）
 
@@ -55,6 +57,7 @@ daylog [--data 私有目录] <命令>
   analyze [--batch ID]        整理一段记录；--retry 立即重试
   config [选项]              查看或修改配置
   update [--check]            安装更新；--check 只检查
+  notion setup|status|sync    配置、查看或手动执行 Notion 同步
 
 排障
   doctor                     检查系统与最近整理结果，不截图或联网
@@ -218,6 +221,8 @@ func executeCommand(args []string) error {
 		return nativeErr
 	}
 	switch args[0] {
+	case "notion":
+		return notionCommand(ctx, s, args[1:])
 	case "report":
 		return reportCommand(ctx, s, args[1:])
 	case "start":
@@ -458,6 +463,9 @@ func executeCommand(args []string) error {
 		}
 		platform.BackgroundPriority()
 		r := journal.Runner{Store: s, Config: c, Source: source, Key: func() string { return apiKey(c) }}
+		if *fixture == "" {
+			r.Background = func(ctx context.Context) { notion.Run(ctx, s.Root, nativeNotionSecrets{}) }
+		}
 		return r.Run(ctx)
 	case "status":
 		return statusCommand(s, args[1:])

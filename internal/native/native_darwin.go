@@ -4,7 +4,7 @@ package native
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc -mmacosx-version-min=14.0
-#cgo LDFLAGS: -framework Foundation -framework AppKit -framework ScreenCaptureKit -framework CoreGraphics -framework ImageIO -framework IOKit -framework Security
+#cgo LDFLAGS: -framework Foundation -framework AppKit -framework ScreenCaptureKit -framework CoreGraphics -framework ImageIO -framework IOKit -framework Security -framework LocalAuthentication
 #include <stdlib.h>
 char *dg_environment(void);
 int dg_capture(int height, int quality, unsigned int windowID, const char *blocked, void **bytes, int *length);

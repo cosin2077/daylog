@@ -3,6 +3,7 @@ package main
 import "strings"
 
 var commandUsage = map[string]string{
+	"notion":     notionHelp,
 	"today":      "daylog today [today|yesterday] [--date YYYY-MM-DD] [--full | --limit N] [--explain] [--json]\n\n查看当天活动；默认最多 20 项，--full 查看全部。--explain 查看估时说明。",
 	"status":     "daylog status [--verbose] [--json]\n\n查看记录状态和下一步。--verbose 显示截图、进程和整理详情。",
 	"report":     reportHelp,

@@ -15,14 +15,14 @@
 先将发布改动提交并推送到 main，确认 macOS 两个架构和 Windows CI 均成功。可以先对当前 ref 运行签名预检：
 
 ```sh
-gh workflow run release.yml --ref main -f tag=v0.9.0 -f verify_only=true
+gh workflow run release.yml --ref main -f tag=v0.10.0 -f verify_only=true
 ```
 
 `verify_only` 使用所选 ref 的代码，tag 输入仅指定版本；它不要求标签存在，也不创建 Release。预检成功后，再创建指向已验证提交的标签：
 
 ```sh
-git tag -a v0.9.0 -m "Daylog 0.9.0"
-git push origin v0.9.0
+git tag -a v0.10.0 -m "Daylog 0.10.0"
+git push origin v0.10.0
 ```
 
 这些是维护者显式执行的发布操作，构建脚本不会自动推送。普通手动发布必须输入已存在的标签，不能把未提交改动或任意分支当作该标签内容。
@@ -65,12 +65,12 @@ macOS 普通开发构建使用显式开发标记：
 ```sh
 go test -race ./...
 go vet ./...
-DAYLOG_DEVELOPMENT_BUILD=1 DAYLOG_VERSION=0.9.0 sh scripts/build.sh --all-arches
+DAYLOG_DEVELOPMENT_BUILD=1 DAYLOG_VERSION=0.10.0 sh scripts/build.sh --all-arches
 python3 scripts/verify-runtime.py --skip-native-check
 python3 scripts/verify-installer.py
 ```
 
-`--all-arches` 同时生成 Windows 包。正式包使用签名包装器构建，再执行 `python3 scripts/package-release.py --version 0.9.0`；开发包不能通过正式打包检查。发布附件位于 `dist/release/`，本地 `skills/daylog/assets/release.json` 保留相对路径。打包要求三个平台包均为本轮同一版本。
+`--all-arches` 同时生成 Windows 包。正式包使用签名包装器构建，再执行 `python3 scripts/package-release.py --version 0.10.0`；开发包不能通过正式打包检查。发布附件位于 `dist/release/`，本地 `skills/daylog/assets/release.json` 保留相对路径。打包要求三个平台包均为本轮同一版本。
 
 Windows runner 用 `DAYLOG_DEVELOPMENT_BUILD=1` 环境变量运行 `python scripts/build-windows.py`，再运行 `python scripts/verify-windows.py`。正式签名检查使用 `python scripts/verify-windows-signed.py <release-assets-directory>`。测试仅使用独立临时目录、合成图片和本地结果，不调用真实模型；安装脚本遵守系统执行策略。
 

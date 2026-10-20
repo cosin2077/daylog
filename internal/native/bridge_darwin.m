@@ -8,6 +8,7 @@
 #import <IOKit/ps/IOPowerSources.h>
 #import <IOKit/ps/IOPSKeys.h>
 #import <Security/Security.h>
+#import <LocalAuthentication/LocalAuthentication.h>
 #import <pthread.h>
 
 static NSString *frontmost(void) {
@@ -168,3 +169,23 @@ char *dg_secret_get(void) {
     }
 }
 int dg_secret_delete(void){OSStatus status=SecItemDelete((__bridge CFDictionaryRef)secretQuery());return status==errSecSuccess||status==errSecItemNotFound?0:1;}
+
+static NSDictionary *namedSecretQuery(const char *name){return @{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,(__bridge id)kSecAttrService:@"io.daylog.agent.integrations",(__bridge id)kSecAttrAccount:[NSString stringWithUTF8String:name]};}
+int dg_named_secret_set(const char *name,const char *value) {
+    @autoreleasepool {
+        NSData *data=[NSData dataWithBytes:value length:strlen(value)];
+        NSDictionary *changes=@{(__bridge id)kSecValueData:data};
+        OSStatus status=SecItemUpdate((__bridge CFDictionaryRef)namedSecretQuery(name),(__bridge CFDictionaryRef)changes);
+        if(status==errSecItemNotFound){NSMutableDictionary *item=[namedSecretQuery(name) mutableCopy];item[(__bridge id)kSecValueData]=data;status=SecItemAdd((__bridge CFDictionaryRef)item,NULL);}
+        return status==errSecSuccess?0:1;
+    }
+}
+char *dg_named_secret_get(const char *name) {
+    @autoreleasepool {
+        NSMutableDictionary *query=[namedSecretQuery(name) mutableCopy];query[(__bridge id)kSecReturnData]=@YES;LAContext *auth=[LAContext new];auth.interactionNotAllowed=YES;query[(__bridge id)kSecUseAuthenticationContext]=auth;
+        CFTypeRef value=NULL;if(SecItemCopyMatching((__bridge CFDictionaryRef)query,&value)!=errSecSuccess)return NULL;
+        NSData *data=CFBridgingRelease(value);char *out=malloc(data.length+1);if(!out)return NULL;
+        memcpy(out,data.bytes,data.length);out[data.length]=0;return out;
+    }
+}
+int dg_named_secret_delete(const char *name){OSStatus status=SecItemDelete((__bridge CFDictionaryRef)namedSecretQuery(name));return status==errSecSuccess||status==errSecItemNotFound?0:1;}

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const estimationVersion = "bounded_neighbors_v3"
+const estimationVersion = "bounded_neighbors_v4"
 
 // Estimate only inside adjacent, bounded observations. Inferred spans are kept
 // separate from continuous observation evidence and never extend beyond a pair.
@@ -48,27 +48,11 @@ func estimateReport(input Report) Report {
 		if p.TaskID == "" || p.At.Before(r.Start) || p.At.After(r.End) {
 			return -1
 		}
-		best := -1
-		var distance time.Duration
-		for i, c := range input.Cards {
-			if c.TaskID != p.TaskID || (c.Confidence != "medium" && c.Confidence != "high") {
-				continue
-			}
-			// Reused screenshot observations can lie outside the old card's
-			// keyframe bounds. The persisted task label, not that old bound,
-			// identifies them; choose the nearest card when a task has phases.
-			d := time.Duration(0)
-			if p.At.Before(c.Start) {
-				d = c.Start.Sub(p.At)
-			}
-			if p.At.After(c.End) {
-				d = p.At.Sub(c.End)
-			}
-			if best < 0 || d < distance {
-				best, distance = i, d
-			}
+		index := observationCard(input.Cards, p)
+		if index < 0 || (input.Cards[index].Confidence != "medium" && input.Cards[index].Confidence != "high") {
+			return -1
 		}
-		return best
+		return index
 	}
 	add := func(index int, from, to time.Time) {
 		if index < 0 {
@@ -217,8 +201,8 @@ func uniqueObservations(input []TaskObservation) []TaskObservation {
 			*last = p
 			continue
 		}
-		if last.TaskID != p.TaskID || last.App != p.App || last.State != p.State {
-			last.TaskID, last.State = "", "conflict"
+		if last.TaskID != p.TaskID || last.App != p.App || last.State != p.State || (last.ActivityID != "" && p.ActivityID != "" && last.ActivityID != p.ActivityID) {
+			last.TaskID, last.State, last.ActivityID = "", "conflict", ""
 		}
 		last.MaxGapSeconds = min(last.MaxGapSeconds, p.MaxGapSeconds)
 	}

@@ -22,9 +22,11 @@ func (s *Store) observationStates(r Report) Report {
 	}
 	points := append([]TaskObservation(nil), r.TaskObservations...)
 	labels := map[string]string{}
+	activities := map[string]string{}
 	for _, card := range r.Cards {
 		for _, id := range card.Evidence {
 			labels[id] = card.TaskID
+			activities[id] = card.ActivityID
 		}
 	}
 	// Recover original keyframe bounds before removing obsolete inferred spans.
@@ -65,6 +67,9 @@ func (s *Store) observationStates(r Report) Report {
 		for i := range points {
 			if (points[i].State == "" || points[i].State == "sampled") && points[i].At.Equal(o.At) && o.State == "sampled" && points[i].App == o.App {
 				points[i].State = o.State
+				if points[i].ActivityID == "" {
+					points[i].ActivityID = activities[o.FrameID]
+				}
 				if points[i].TaskID == "" {
 					points[i].TaskID = labels[o.FrameID]
 				}

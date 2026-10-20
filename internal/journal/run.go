@@ -18,6 +18,7 @@ import (
 )
 
 type Runner struct {
+	Background      func(context.Context)
 	Store           *Store
 	Config          Config
 	Source          native.Source
@@ -88,6 +89,10 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 	go func() { defer workers.Done(); r.serve(ctx, listener, cancel) }()
 	workers.Add(1)
 	go func() { defer workers.Done(); r.analysisLoop(ctx) }()
+	if r.Background != nil {
+		workers.Add(1)
+		go func() { defer workers.Done(); r.Background(ctx) }()
+	}
 	defer func() {
 		cancel()
 		listener.Close()

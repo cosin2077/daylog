@@ -62,11 +62,12 @@ func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 	type run struct {
 		start, end time.Time
 		task       string
+		category   string
 	}
 	var parts []run
 	var points []TaskObservation
 	titles := map[string]string{}
-	categories := map[string]string{}
+	pointCategories := map[string]string{}
 	for _, r := range reports {
 		if !r.Start.Before(end) || !r.End.After(start) {
 			continue
@@ -85,7 +86,6 @@ func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 			if c.TaskTitle != "" {
 				titles[c.TaskID] = c.TaskTitle
 			}
-			categories[c.TaskID] = category(c.Category)
 			for _, s := range c.Spans {
 				if s.Inferred || s.Interpolated {
 					continue
@@ -101,7 +101,7 @@ func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 					if until.After(clipped.end) {
 						until = clipped.end
 					}
-					parts = append(parts, run{at, until, c.TaskID})
+					parts = append(parts, run{start: at, end: until, task: c.TaskID})
 					at = until
 				}
 			}
@@ -112,6 +112,9 @@ func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 			}
 			if !p.At.Before(start) && p.At.Before(end) {
 				points = append(points, p)
+				if index := observationCard(r.Cards, p); index >= 0 {
+					pointCategories[p.At.Format(time.RFC3339Nano)+"|"+p.TaskID] = category(r.Cards[index].Category)
+				}
 			}
 		}
 	}
@@ -200,7 +203,7 @@ func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 		if connected {
 			result.TaskSwitches++
 		}
-		visits = append(visits, run{p.At, p.At, p.TaskID})
+		visits = append(visits, run{start: p.At, end: p.At, task: p.TaskID, category: pointCategories[p.At.Format(time.RFC3339Nano)+"|"+p.TaskID]})
 		if len(visits) > 3 {
 			visits = visits[len(visits)-3:]
 		}
@@ -215,7 +218,7 @@ func buildContinuity(start, end time.Time, reports []Report) ContinuitySummary {
 					supported = append(supported, part)
 				}
 			}
-			result.Fragments = append(result.Fragments, TimeFragment{TaskID: middle.task, Title: titles[middle.task], Category: categories[middle.task], FromTitle: titles[visits[0].task], NextTitle: titles[p.TaskID], Start: middle.start.In(start.Location()), End: middle.end.In(start.Location()), NextAt: p.At.In(start.Location()), EstimatedSeconds: covered(supported), Returned: visits[0].task == p.TaskID})
+			result.Fragments = append(result.Fragments, TimeFragment{TaskID: middle.task, Title: titles[middle.task], Category: category(middle.category), FromTitle: titles[visits[0].task], NextTitle: titles[p.TaskID], Start: middle.start.In(start.Location()), End: middle.end.In(start.Location()), NextAt: p.At.In(start.Location()), EstimatedSeconds: covered(supported), Returned: visits[0].task == p.TaskID})
 		}
 		if len(visits) == 3 && visits[0].task == p.TaskID && p.At.Sub(visits[0].end) <= 5*time.Minute {
 			result.BriefReturns++

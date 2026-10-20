@@ -294,6 +294,7 @@ func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
 			point := TaskObservation{At: o.At, App: o.App, State: o.State, MaxGapSeconds: b.MaxGapSeconds}
 			if label := labels[i]; label >= 0 {
 				point.TaskID = r.Cards[label].TaskID
+				point.ActivityID = r.Cards[label].ActivityID
 			}
 			r.TaskObservations = append(r.TaskObservations, point)
 		}

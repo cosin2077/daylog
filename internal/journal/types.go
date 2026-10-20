@@ -97,6 +97,7 @@ type Report struct {
 // Persisted task labels and availability for local estimates, not extra images.
 // Empty TaskID is unknown; state distinguishes an unidentified sample from a gap.
 type TaskObservation struct {
+	ActivityID    string    `json:"activity_id,omitempty"`
 	State         string    `json:"state,omitempty"`
 	At            time.Time `json:"at"`
 	App           string    `json:"app,omitempty"`

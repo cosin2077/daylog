@@ -58,7 +58,7 @@ func explainError(err error) error {
 	return &commandError{cause: err, message: message, code: "command_failed"}
 }
 
-var commands = []string{"start", "stop", "status", "today", "report", "config", "doctor", "permission", "windows", "agents", "pending", "analyze", "pause", "resume", "init", "run", "commit", "auth", "service", "update", "version", "prompt"}
+var commands = []string{"start", "stop", "status", "today", "report", "config", "doctor", "permission", "windows", "agents", "pending", "analyze", "pause", "resume", "init", "run", "commit", "auth", "service", "update", "version", "prompt", "notion"}
 
 func unknownCommand(name string) error {
 	best, score := "", 3
