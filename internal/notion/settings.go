@@ -81,7 +81,7 @@ func ParsePage(raw string) (string, error) {
 			return "", errors.New("请提供 HTTPS Notion 页面链接或页面 ID")
 		}
 		host := strings.ToLower(u.Hostname())
-		if !(host == "notion.so" || host == "www.notion.so" || host == "notion.site" || strings.HasSuffix(host, ".notion.site")) {
+		if !(host == "notion.so" || host == "www.notion.so" || host == "app.notion.com" || host == "www.notion.com" || host == "notion.com" || host == "notion.site" || strings.HasSuffix(host, ".notion.site")) {
 			return "", errors.New("请提供 Notion 页面链接")
 		}
 		part = u.Path

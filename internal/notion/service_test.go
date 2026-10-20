@@ -275,7 +275,7 @@ func TestLimitsAndRichTextAndPageParsing(t *testing.T) {
 	if len(chunks) != 3 || plain(chunks) != text {
 		t.Fatal("text truncated")
 	}
-	for _, raw := range []string{"https://www.notion.so/Daylog-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?source=copy_link", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"} {
+	for _, raw := range []string{"https://app.notion.com/p/daylog-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "https://www.notion.so/Daylog-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?source=copy_link", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"} {
 		id, err := ParsePage(raw)
 		if err != nil || id != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 			t.Fatal(id, err)
