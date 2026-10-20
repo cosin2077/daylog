@@ -41,6 +41,7 @@ for daylog_arch in $daylog_arches; do
 </dict></plist>
 PLIST
   cp LICENSE "$daylog_app/Contents/Resources/LICENSE"
+  cp docs/third-party-notices.txt "$daylog_app/Contents/Resources/THIRD_PARTY_NOTICES.txt"
   cp assets/icon/Daylog.icns "$daylog_app/Contents/Resources/Daylog.icns"
   python3 scripts/sign-app.py "$daylog_app"
   /usr/bin/codesign --verify --deep --strict "$daylog_app"
