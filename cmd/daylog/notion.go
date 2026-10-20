@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"daylog/internal/journal"
 	"daylog/internal/native"
 	"daylog/internal/notion"
+	"daylog/internal/platform"
 	"golang.org/x/term"
 )
 
@@ -66,6 +68,21 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
+	if op == "setup" {
+		dir := filepath.Join(store.Root, "integrations")
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return err
+		}
+		lock, err := os.OpenFile(filepath.Join(dir, "notion-setup.lock"), os.O_CREATE|os.O_RDWR, 0600)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+		if err = platform.TryLock(lock); err != nil {
+			return errors.New("另一个 Notion 配置正在进行，请稍后再试")
+		}
+		defer platform.Unlock(lock)
+	}
 	sinceExplicit := false
 	f.Visit(func(value *flag.Flag) {
 		if value.Name == "since" {
@@ -89,6 +106,18 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 	if op == "setup" {
 		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 			return readErr
+		}
+		if zone == "" {
+			if stdin || !term.IsTerminal(int(os.Stdin.Fd())) {
+				return errors.New("无法确定本机 IANA 时区，请用 --timezone 指定，例如 Asia/Shanghai")
+			}
+			fmt.Fprint(os.Stderr, "固定时区（例如 Asia/Shanghai）：")
+			reader := bufio.NewReader(os.Stdin)
+			value, err := reader.ReadString('\n')
+			if err != nil {
+				return errors.New("无法读取时区")
+			}
+			zone = strings.TrimSpace(value)
 		}
 		token := ""
 		if stdin {
@@ -156,13 +185,20 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 				proposed.Since = settings.Since
 			}
 		}
+		client := notion.NewClient(token)
+		preflightCtx, preflightCancel := context.WithTimeout(ctx, 30*time.Second)
+		preflightErr := client.CheckParent(preflightCtx, proposed.ParentPage)
+		preflightCancel()
+		if preflightErr != nil {
+			return preflightErr
+		}
 		if err = (nativeNotionSecrets{}).Set(proposed.SecretName(), token); err != nil {
 			return err
 		}
 		if err = notion.SaveSettings(store.Root, proposed); err != nil {
 			return err
 		}
-		service := notion.Service{Root: store.Root, Settings: proposed, Client: notion.NewClient(token), AllowUncertain: retryUncertain}
+		service := notion.Service{Root: store.Root, Settings: proposed, Client: client, AllowUncertain: retryUncertain}
 		setupCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer cancel()
 		if err = service.Setup(setupCtx); err != nil {
@@ -186,7 +222,10 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 	if op == "sync" && dryRun && readErr != nil {
 		settings.Timezone = notion.SystemTimezone()
 	}
-	location, err := time.LoadLocation(settings.Timezone)
+	location, err := time.Local, error(nil)
+	if settings.Timezone != "" {
+		location, err = time.LoadLocation(settings.Timezone)
+	}
 	if err != nil {
 		return errors.New("Notion 时区无效")
 	}

@@ -37,6 +37,7 @@ type Activity struct {
 }
 
 type Day struct {
+	DraftFrames           int        `json:"draft_frames"`
 	LegacyCoverageSeconds int64      `json:"legacy_coverage_seconds"`
 	SourceBatches         []string   `json:"source_batches"`
 	SchemaVersion         int        `json:"schema_version"`
@@ -53,7 +54,7 @@ type Day struct {
 }
 
 func (d Day) HasData() bool {
-	return d.AnalyzedBatches > 0 || d.PendingBatches > 0 || len(d.Activities) > 0 || d.UnknownSeconds > 0
+	return d.AnalyzedBatches > 0 || d.PendingBatches > 0 || len(d.Activities) > 0 || d.UnknownSeconds > 0 || d.DraftFrames > 0
 }
 func (d Day) Hash() string {
 	raw, _ := json.Marshal(d)
@@ -70,7 +71,7 @@ func LoadDay(s *journal.Store, day time.Time) (Day, error) {
 	if err != nil {
 		return Day{}, err
 	}
-	result := Day{LegacyCoverageSeconds: p.LegacyCoverageSeconds, SchemaVersion: 1, Date: start.Format("2006-01-02"), Timezone: start.Location().String(), EstimatedSeconds: p.EstimatedSeconds, InferredSeconds: p.InferredSeconds, InterpolatedSeconds: p.InterpolatedSeconds, UnknownSeconds: p.UnknownSeconds, AnalyzedBatches: p.AnalyzedBatches, PendingBatches: p.PendingBatches, FailedBatches: p.FailedBatches, Activities: []Activity{}, SourceBatches: []string{}}
+	result := Day{DraftFrames: p.DraftFrames, LegacyCoverageSeconds: p.LegacyCoverageSeconds, SchemaVersion: 1, Date: start.Format("2006-01-02"), Timezone: start.Location().String(), EstimatedSeconds: p.EstimatedSeconds, InferredSeconds: p.InferredSeconds, InterpolatedSeconds: p.InterpolatedSeconds, UnknownSeconds: p.UnknownSeconds, AnalyzedBatches: p.AnalyzedBatches, PendingBatches: p.PendingBatches, FailedBatches: p.FailedBatches, Activities: []Activity{}, SourceBatches: []string{}}
 	for _, r := range reports {
 		result.SourceBatches = append(result.SourceBatches, r.BatchID)
 		for index, c := range r.Cards {

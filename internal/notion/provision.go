@@ -24,7 +24,7 @@ func dailySchema() map[string]any {
 	for _, name := range []string{"Daylog ID", "来源", "内容指纹", "时区", "简要记录"} {
 		p[name] = map[string]any{"rich_text": map[string]any{}}
 	}
-	for _, name := range []string{"估计秒数", "邻接推断秒数", "关键帧插值秒数", "未估时秒数", "旧版覆盖秒数", "活动数", "已整理段数", "待整理段数", "失败段数"} {
+	for _, name := range []string{"估计秒数", "邻接推断秒数", "关键帧插值秒数", "未估时秒数", "旧版覆盖秒数", "活动数", "已整理段数", "待整理段数", "失败段数", "未封批截图数"} {
 		p[name] = map[string]any{"number": map[string]any{"format": "number"}}
 	}
 	return p
@@ -100,7 +100,7 @@ func (s *Service) ensureDatabase(ctx context.Context, role, title string, schema
 	return id, source, nil
 }
 func (s *Service) Setup(ctx context.Context) error {
-	if _, err := s.Client.request(ctx, "GET", "/pages/"+s.Settings.ParentPage, nil); err != nil {
+	if err := s.Client.CheckParent(ctx, s.Settings.ParentPage); err != nil {
 		return err
 	}
 	var err error
@@ -200,4 +200,19 @@ func uniqueRows(rows []map[string]any) (map[string]map[string]any, error) {
 }
 func (s *Service) syncKey(parts ...string) string {
 	return "daylog:" + s.Settings.SourceID + ":" + strings.Join(parts, ":")
+}
+
+func (c *Client) CheckParent(ctx context.Context, id string) error {
+	normalized, err := ParsePage(id)
+	if err != nil {
+		return err
+	}
+	page, err := c.request(ctx, "GET", "/pages/"+normalized, nil)
+	if err != nil {
+		return err
+	}
+	if page["in_trash"] == true || page["archived"] == true {
+		return errors.New("Notion 目标页面已归档或移入回收站，请恢复后重试")
+	}
+	return nil
 }

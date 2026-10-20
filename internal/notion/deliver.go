@@ -91,8 +91,9 @@ func (s *Service) Deliver(ctx context.Context, day exports.Day) (string, error) 
 	properties["已整理段数"] = numberProperty(int64(day.AnalyzedBatches))
 	properties["待整理段数"] = numberProperty(int64(day.PendingBatches))
 	properties["失败段数"] = numberProperty(int64(day.FailedBatches))
+	properties["未封批截图数"] = numberProperty(int64(day.DraftFrames))
 	status := "已同步"
-	if day.PendingBatches > 0 {
+	if day.PendingBatches > 0 || day.DraftFrames > 0 {
 		status = "整理中"
 	}
 	properties["状态"] = selectValue("同步中")
@@ -139,7 +140,12 @@ func (s *Service) Deliver(ctx context.Context, day exports.Day) (string, error) 
 			durationStatus = "旧版范围"
 		}
 		p["时长状态"] = selectValue(durationStatus)
-		p["时间"] = map[string]any{"date": map[string]any{"start": a.Start.Format("2006-01-02T15:04:05.999999999Z07:00"), "end": a.End.Format("2006-01-02T15:04:05.999999999Z07:00")}}
+		from, until := a.Start.Truncate(time.Millisecond), a.End.Truncate(time.Millisecond)
+		when := map[string]any{"start": from.Format(time.RFC3339Nano)}
+		if until.After(from) {
+			when["end"] = until.Format(time.RFC3339Nano)
+		}
+		p["时间"] = map[string]any{"date": when}
 		p["估计秒数"] = numberProperty(a.EstimatedSeconds)
 		p["邻接推断秒数"] = numberProperty(a.InferredSeconds)
 		p["关键帧插值秒数"] = numberProperty(a.InterpolatedSeconds)

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"daylog/internal/journal"
 )
@@ -42,6 +43,9 @@ func ReadSettings(root string) (Settings, error) {
 	}
 	if _, err = ParsePage(s.ParentPage); err != nil {
 		return s, err
+	}
+	if s.Timezone == "" || s.Timezone == "Local" {
+		return s, errors.New("请配置固定 IANA 时区，例如 Asia/Shanghai")
 	}
 	if _, err = time.LoadLocation(s.Timezone); err != nil {
 		return s, errors.New("Notion 时区无效")
@@ -97,6 +101,9 @@ func NewSettings(parent, zone, since string) (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
+	if zone == "" || zone == "Local" {
+		return Settings{}, errors.New("请用 --timezone 指定固定 IANA 时区，例如 Asia/Shanghai")
+	}
 	if _, err = time.LoadLocation(zone); err != nil {
 		return Settings{}, errors.New("时区须为有效的 IANA 名称，例如 Asia/Shanghai")
 	}
@@ -122,5 +129,5 @@ func SystemTimezone() string {
 			}
 		}
 	}
-	return "Local"
+	return ""
 }

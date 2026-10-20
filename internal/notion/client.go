@@ -15,6 +15,11 @@ import (
 
 const apiVersion = "2026-03-11"
 
+type requestNotSent struct{ cause error }
+
+func (e *requestNotSent) Error() string { return "Notion 请求尚未发出" }
+func (e *requestNotSent) Unwrap() error { return e.cause }
+
 type Client struct {
 	token, base string
 	http        *http.Client
@@ -27,6 +32,7 @@ func NewClient(token string) *Client {
 }
 
 type Error struct {
+	ReceivedAt  time.Time
 	Status      int
 	Code        string
 	Wait        time.Duration
@@ -66,6 +72,12 @@ func (e *Error) RetryDelay() time.Duration {
 	}
 	return 0
 }
+func (e *Error) RetryAt() time.Time {
+	if e.ReceivedAt.IsZero() || e.RetryDelay() <= 0 {
+		return time.Time{}
+	}
+	return e.ReceivedAt.Add(e.RetryDelay())
+}
 func (e *Error) Permanent() bool {
 	return e.Status == 400 || e.Status == 401 || e.Status == 403 || e.Status == 404 || e.Code == "duplicate"
 }
@@ -80,7 +92,7 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (ma
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, ctx.Err()
+			return nil, &requestNotSent{ctx.Err()}
 		case <-timer.C:
 		}
 	}
@@ -103,6 +115,9 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (ma
 	req.Header.Set("Notion-Version", apiVersion)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Daylog")
+	if err := ctx.Err(); err != nil {
+		return nil, &requestNotSent{err}
+	}
 	client := *c.http
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return errors.New("Notion redirects are refused") }
 	c.last = time.Now()
@@ -125,7 +140,7 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (ma
 		return nil, &Error{Status: response.StatusCode, Uncertain: write}
 	}
 	var result map[string]any
-	if json.Unmarshal(raw, &result) != nil {
+	if json.Unmarshal(raw, &result) != nil || result == nil {
 		return nil, &Error{Status: response.StatusCode, Uncertain: write}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -137,7 +152,7 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (ma
 			code = "block_limit"
 		}
 		uncertain := write && response.StatusCode >= 500 && response.StatusCode != 529
-		return nil, &Error{Status: response.StatusCode, Code: code, Wait: time.Duration(max(wait, 0)) * time.Second, Uncertain: uncertain, CommittedID: committed}
+		return nil, &Error{ReceivedAt: time.Now(), Status: response.StatusCode, Code: code, Wait: time.Duration(max(wait, 0)) * time.Second, Uncertain: uncertain, CommittedID: committed}
 	}
 	return result, nil
 }

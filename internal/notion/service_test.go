@@ -3,11 +3,11 @@ package notion
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -217,7 +217,7 @@ func TestSetupIdempotentAndCompleteQuantitativeSync(t *testing.T) {
 	if f.posts != posts || str(obj(obj(obj(daily["properties"])["状态"])["select"])["name"]) != "已同步" {
 		t.Fatal("late analysis created duplicate or not finalized")
 	}
-	raw, _ := os.ReadFile(filepath.Join(s.Settings.StateRoot(s.Root), "receipts.json"))
+	raw, _ := os.ReadFile(s.receiptFile(s.syncKey("day", day.Date, day.Timezone)))
 	if strings.Contains(string(raw), "fixture-not-real") {
 		t.Fatal("token persisted")
 	}
@@ -319,3 +319,70 @@ func TestRedirectDoesNotForwardAuthorization(t *testing.T) {
 }
 
 func (f *fakeAPI) postCount() int { f.mu.Lock(); defer f.mu.Unlock(); return f.posts }
+
+func TestSuccessfulReceiptUsesKnownIDWhenQueryMisses(t *testing.T) {
+	s, f := setupFake(t)
+	key := s.syncKey("day", "2026-10-18", "Asia/Shanghai")
+	body := map[string]any{"parent": map[string]any{"data_source_id": s.Settings.DailySource}, "properties": s.baseProperties(key, "hash")}
+	find := func() (map[string]any, error) { return nil, nil }
+	first, err := s.createOnce(context.Background(), key, "/pages", body, find)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.createOnce(context.Background(), key, "/pages", body, find)
+	if err != nil || str(first["id"]) != str(second["id"]) || f.postCount() != 1 {
+		t.Fatal("query miss duplicated confirmed create", err)
+	}
+}
+func TestCancelledBeforeSendDoesNotPoisonReceipt(t *testing.T) {
+	s, f := setupFake(t)
+	s.Client.last = time.Now()
+	s.Client.interval = time.Hour
+	key := s.syncKey("day", "2026-10-18", "Asia/Shanghai")
+	body := map[string]any{"properties": s.baseProperties(key, "hash")}
+	find := func() (map[string]any, error) { return nil, nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	_, err := s.createOnce(ctx, key, "/pages", body, find)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	records, err := readReceipts(s.receiptFile(key))
+	if err != nil || records[key].Pending || f.postCount() != 0 {
+		t.Fatal("unsent request became uncertain", err)
+	}
+	s.Client.interval = 0
+	if _, err = s.createOnce(context.Background(), key, "/pages", body, find); err != nil {
+		t.Fatal("unsent request could not retry", err)
+	}
+}
+func TestReceiptBucketsSurviveLifetimeScale(t *testing.T) {
+	s, _ := setupFake(t)
+	records := map[string]receipt{}
+	for i := 0; i < 12000; i++ {
+		records[fmt.Sprint(i)+strings.Repeat("x", 100)+":2026-10-18"] = receipt{ID: fmt.Sprintf("%032x", i+1)}
+	}
+	path := s.receiptFile("daylog:source:day:2026-10-18")
+	if err := writeReceipts(path, records); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(path)
+	if info.Size() <= 2<<20 {
+		t.Fatal("scale fixture too small")
+	}
+	loaded, err := readReceipts(path)
+	if err != nil || len(loaded) != 12000 {
+		t.Fatal("lifetime receipt read failed", err, len(loaded))
+	}
+	if s.receiptFile("daylog:source:day:2026-10-19") == path {
+		t.Fatal("all dates still share lifetime file")
+	}
+}
+func TestLocalTimezoneCannotBePersisted(t *testing.T) {
+	if _, err := NewSettings("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Local", "2026-10-18"); err == nil {
+		t.Fatal("mutable timezone accepted")
+	}
+	if _, err := NewSettings("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "America/Los_Angeles", "2026-10-18"); err != nil {
+		t.Fatal("bundled IANA timezone unavailable", err)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -125,5 +126,91 @@ func TestLoadDayClipsAndPreservesOriginalSegments(t *testing.T) {
 	empty, _ := LoadDay(s, day.AddDate(0, 0, 2))
 	if empty.HasData() {
 		t.Fatal(empty)
+	}
+}
+
+func TestManualSyncPreservesHistoryAndReactivatesProviderFailures(t *testing.T) {
+	day := time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)
+	now := day.AddDate(0, 0, 2)
+	ids := []string{"kept", "removed"}
+	calls := 0
+	fail := false
+	e := Engine{Root: t.TempDir(), Now: func() time.Time { return now }, Load: func(d time.Time) (Day, error) {
+		return Day{Date: d.Format("2006-01-02"), AnalyzedBatches: 1, SourceBatches: ids}, nil
+	}, Sink: sinkFunc(func(context.Context, Day) (string, error) {
+		calls++
+		if fail {
+			return "", failing{blocked: true}
+		}
+		return "url", nil
+	})}
+	if _, err := e.Sync(context.Background(), day, true); err != nil {
+		t.Fatal(err)
+	}
+	ids = []string{"kept"}
+	if _, err := e.Sync(context.Background(), day, true); err == nil || calls != 1 {
+		t.Fatal("manual sync bypassed history guard", calls, err)
+	}
+	e.Root = t.TempDir()
+	ids = nil
+	fail = true
+	e.RunDue(context.Background(), day, now, 90)
+	fail = false
+	if _, err := e.Sync(context.Background(), day.AddDate(0, 0, 1), true); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := ReadState(e.Root)
+	if state.Blocked || state.Days["2026-10-18"].Blocked {
+		t.Fatal("old provider failure remained blocked")
+	}
+	previous := calls
+	e.RunDue(context.Background(), day, now, 90)
+	if calls != previous+1 {
+		t.Fatal("old failed day was never delivered", calls, previous)
+	}
+}
+func TestLongLivedStateIsPrunedWithoutGrowingManifestArrays(t *testing.T) {
+	root := t.TempDir()
+	state := State{Days: map[string]Job{}}
+	from := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 8000; i++ {
+		state.Days[from.AddDate(0, 0, i).Format("2006-01-02")] = Job{Hash: "hash", URL: strings.Repeat("x", 400), LastSuccess: from}
+	}
+	if err := journal.WriteJSON(filepath.Join(root, "sync-state.json"), state); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(filepath.Join(root, "sync-state.json"))
+	if info.Size() <= 2<<20 {
+		t.Fatal("state fixture too small")
+	}
+	now := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
+	e := Engine{Root: root}
+	if err := e.RunDue(context.Background(), now, now, 90); err != nil {
+		t.Fatal(err)
+	}
+	after, err := ReadState(root)
+	if err != nil || len(after.Days) != 0 || after.ArchivedDays != 8000 {
+		t.Fatal("state failed retention pruning", err, len(after.Days))
+	}
+}
+
+func TestBadLocalDateDoesNotStarveHealthySync(t *testing.T) {
+	at := time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)
+	var delivered []string
+	e := Engine{Root: t.TempDir(), Load: func(d time.Time) (Day, error) {
+		if d.Equal(at) {
+			return Day{}, errors.New("damaged metadata")
+		}
+		return Day{Date: d.Format("2006-01-02"), DraftFrames: 1}, nil
+	}, Sink: sinkFunc(func(_ context.Context, d Day) (string, error) {
+		delivered = append(delivered, d.Date)
+		return "url", nil
+	})}
+	if err := e.RunDue(context.Background(), at, at.AddDate(0, 0, 2), 90); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := ReadState(e.Root)
+	if len(delivered) != 1 || delivered[0] != "2026-10-19" || state.Days["2026-10-18"].LastError == "" {
+		t.Fatal("bad day blocked healthy date", delivered, state)
 	}
 }

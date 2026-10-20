@@ -2,8 +2,10 @@ package exports
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -33,14 +35,17 @@ type Job struct {
 	Attempts      int       `json:"attempts"`
 	NextAttempt   time.Time `json:"next_attempt,omitempty"`
 	LastError     string    `json:"last_error,omitempty"`
+	BlockReason   string    `json:"block_reason,omitempty"`
 	Blocked       bool      `json:"blocked,omitempty"`
 	LastSuccess   time.Time `json:"last_success,omitempty"`
 }
 type State struct {
-	Blocked    bool           `json:"blocked,omitempty"`
-	Error      string         `json:"error,omitempty"`
-	Days       map[string]Job `json:"days"`
-	PauseUntil time.Time      `json:"pause_until,omitempty"`
+	ArchivedDays  int            `json:"archived_days"`
+	ExpiredUnsent int            `json:"expired_unsent"`
+	Blocked       bool           `json:"blocked,omitempty"`
+	Error         string         `json:"error,omitempty"`
+	Days          map[string]Job `json:"days"`
+	PauseUntil    time.Time      `json:"pause_until,omitempty"`
 }
 type Engine struct {
 	Root string
@@ -51,7 +56,18 @@ type Engine struct {
 
 func ReadState(root string) (State, error) {
 	s := State{Days: map[string]Job{}}
-	err := journal.ReadJSON(filepath.Join(root, "sync-state.json"), &s)
+	f, err := os.Open(filepath.Join(root, "sync-state.json"))
+	if err == nil {
+		defer f.Close()
+		var raw []byte
+		raw, err = io.ReadAll(io.LimitReader(f, (16<<20)+1))
+		if err == nil {
+			if len(raw) > 16<<20 {
+				return s, errors.New("本地同步状态过大")
+			}
+			err = json.Unmarshal(raw, &s)
+		}
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		err = nil
 	}
@@ -93,6 +109,27 @@ func (e Engine) RunDue(ctx context.Context, start, now time.Time, retention int)
 		if start.Before(cutoff) {
 			start = cutoff
 		}
+		pruned := false
+		for key, job := range state.Days {
+			date, parseErr := time.ParseInLocation("2006-01-02", key, now.Location())
+			if parseErr != nil {
+				return errors.New("本地同步日期状态无效")
+			}
+			if date.Before(cutoff) {
+				if job.LastSuccess.IsZero() || job.LastError != "" {
+					state.ExpiredUnsent++
+				} else {
+					state.ArchivedDays++
+				}
+				delete(state.Days, key)
+				pruned = true
+			}
+		}
+		if pruned {
+			if err = journal.WriteJSON(filepath.Join(e.Root, "sync-state.json"), state); err != nil {
+				return err
+			}
+		}
 		count := 0
 		for day := start; day.Before(today); day = day.AddDate(0, 0, 1) {
 			if err = ctx.Err(); err != nil {
@@ -105,7 +142,18 @@ func (e Engine) RunDue(ctx context.Context, start, now time.Time, retention int)
 			}
 			snapshot, loadErr := e.Load(day)
 			if loadErr != nil {
-				return loadErr
+				job.Attempts++
+				job.LastError = "无法读取该日期的本地记录，请检查本地数据完整性；其他日期会继续同步"
+				job.NextAttempt = now.Add(syncBackoff(job.Attempts))
+				state.Days[key] = job
+				if err = journal.WriteJSON(filepath.Join(e.Root, "sync-state.json"), state); err != nil {
+					return err
+				}
+				count++
+				if count >= 4 {
+					break
+				}
+				continue
 			}
 			if !snapshot.HasData() || job.Hash == snapshot.Hash() {
 				continue
@@ -155,27 +203,54 @@ func (e Engine) Sync(ctx context.Context, day time.Time, force bool) (Job, error
 }
 func (e Engine) deliver(ctx context.Context, state *State, day Day, now time.Time, force bool) {
 	job := state.Days[day.Date]
-	if !force {
-		present := map[string]bool{}
-		for _, id := range day.SourceBatches {
-			present[id] = true
-		}
-		for _, id := range job.SourceBatches {
-			if !present[id] {
-				job.LastError = "本地历史记录不完整，已保留云端原记录；请先检查本地保留期限"
-				job.Blocked = true
-				state.Days[day.Date] = job
-				return
-			}
+	previous := job.SourceBatches
+	manifest, manifestErr := e.readManifest(day.Date)
+	if manifestErr != nil && !errors.Is(manifestErr, os.ErrNotExist) {
+		job.LastError = "无法读取本地同步来源索引，已保留云端原记录"
+		job.Blocked = true
+		job.BlockReason = "source_incomplete"
+		state.Days[day.Date] = job
+		return
+	}
+	if manifestErr == nil {
+		previous = manifest
+	}
+	present := map[string]bool{}
+	for _, id := range day.SourceBatches {
+		present[id] = true
+	}
+	for _, id := range previous {
+		if !present[id] {
+			job.LastError = "本地历史记录不完整，已保留云端原记录；请先检查本地保留期限"
+			job.Blocked = true
+			job.BlockReason = "source_incomplete"
+			state.Days[day.Date] = job
+			return
 		}
 	}
+
 	if !force && job.Hash == day.Hash() {
 		return
 	}
 	url, err := e.Sink.Deliver(ctx, day)
 	if err == nil {
+		if saveErr := e.writeManifest(day.Date, day.SourceBatches); saveErr != nil {
+			job.LastError = "远端已写入，但本地同步来源索引保存失败，将稍后重新核验"
+			job.NextAttempt = now.Add(time.Minute)
+			state.Days[day.Date] = job
+			return
+		}
 		job.Hash = day.Hash()
-		job.SourceBatches = append([]string(nil), day.SourceBatches...)
+		job.SourceBatches = nil
+		for key, old := range state.Days {
+			if old.Blocked && old.BlockReason == "provider" {
+				old.Blocked = false
+				old.NextAttempt = time.Time{}
+				old.BlockReason = ""
+				state.Days[key] = old
+			}
+		}
+		job.BlockReason = ""
 		state.Blocked = false
 		state.Error = ""
 		job.URL = url
@@ -190,16 +265,16 @@ func (e Engine) deliver(ctx context.Context, state *State, day Day, now time.Tim
 	} else {
 		job.Attempts++
 		job.LastError = err.Error()
-		delay := time.Minute * time.Duration(1<<min(job.Attempts-1, 8))
-		if delay > 6*time.Hour {
-			delay = 6 * time.Hour
-		}
+		delay := syncBackoff(job.Attempts)
 		var failure Failure
 		if errors.As(err, &failure) {
 			if failure.RetryDelay() > delay {
 				delay = failure.RetryDelay()
 			}
 			job.Blocked = failure.Permanent()
+			if job.Blocked {
+				job.BlockReason = "provider"
+			}
 			if job.Blocked {
 				state.Blocked = true
 				state.Error = err.Error()
@@ -209,6 +284,16 @@ func (e Engine) deliver(ctx context.Context, state *State, day Day, now time.Tim
 			}
 		}
 		job.NextAttempt = now.Add(delay)
+		var absolute interface{ RetryAt() time.Time }
+		if errors.As(err, &absolute) {
+			until := absolute.RetryAt()
+			if until.After(job.NextAttempt) {
+				job.NextAttempt = until
+			}
+			if until.After(state.PauseUntil) {
+				state.PauseUntil = until
+			}
+		}
 	}
 	state.Days[day.Date] = job
 }
@@ -231,10 +316,41 @@ func Resume(root string) error {
 		state.Error = ""
 		state.PauseUntil = time.Time{}
 		for key, job := range state.Days {
+			if job.BlockReason == "source_incomplete" {
+				continue
+			}
 			job.Blocked = false
+			job.BlockReason = ""
 			job.NextAttempt = time.Time{}
 			state.Days[key] = job
 		}
 		return journal.WriteJSON(filepath.Join(root, "sync-state.json"), state)
 	})
+}
+
+func (e Engine) readManifest(date string) ([]string, error) {
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return nil, err
+	}
+	var ids []string
+	err := journal.ReadJSON(filepath.Join(e.Root, "manifests", date+".json"), &ids)
+	return ids, err
+}
+func (e Engine) writeManifest(date string, ids []string) error {
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return err
+	}
+	dir := filepath.Join(e.Root, "manifests")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	return journal.WriteJSON(filepath.Join(dir, date+".json"), ids)
+}
+
+func syncBackoff(attempts int) time.Duration {
+	delay := time.Minute * time.Duration(1<<min(max(attempts-1, 0), 8))
+	if delay > 6*time.Hour {
+		return 6 * time.Hour
+	}
+	return delay
 }
