@@ -16,6 +16,7 @@ import (
 )
 
 type Settings struct {
+	Layout           string `json:"layout,omitempty"`
 	Enabled          bool   `json:"enabled"`
 	SourceID         string `json:"source_id"`
 	ParentPage       string `json:"parent_page"`
@@ -27,9 +28,18 @@ type Settings struct {
 	Since            string `json:"since"`
 }
 
+const DailyLayout = "daily_page_v1"
+
 func settingsPath(root string) string { return filepath.Join(root, "integrations", "notion.json") }
 func (s Settings) StateRoot(root string) string {
-	return filepath.Join(root, "integrations", "notion", s.SourceID)
+	path := filepath.Join(root, "integrations", "notion", s.SourceID)
+	if s.Layout == DailyLayout {
+		path = filepath.Join(path, DailyLayout)
+		if s.DailyDatabase != "" {
+			path = filepath.Join(path, strings.ToLower(strings.ReplaceAll(s.DailyDatabase, "-", "")))
+		}
+	}
+	return path
 }
 func (s Settings) SecretName() string { return "notion." + s.SourceID }
 func ReadSettings(root string) (Settings, error) {
@@ -114,7 +124,7 @@ func NewSettings(parent, zone, since string) (Settings, error) {
 	if _, err = rand.Read(b); err != nil {
 		return Settings{}, err
 	}
-	return Settings{SourceID: hex.EncodeToString(b), ParentPage: id, Timezone: zone, Since: since}, nil
+	return Settings{Layout: DailyLayout, SourceID: hex.EncodeToString(b), ParentPage: id, Timezone: zone, Since: since}, nil
 }
 func SystemTimezone() string {
 	if name := time.Local.String(); name != "Local" {

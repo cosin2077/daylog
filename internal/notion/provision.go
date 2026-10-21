@@ -2,10 +2,11 @@ package notion
 
 import (
 	"context"
-	"daylog/internal/exports"
 	"errors"
 	"fmt"
 	"strings"
+
+	"daylog/internal/exports"
 )
 
 type SecretStore interface {
@@ -20,107 +21,83 @@ type Service struct {
 }
 
 func dailySchema() map[string]any {
-	p := map[string]any{"名称": map[string]any{"title": map[string]any{}}, "日期": map[string]any{"date": map[string]any{}}, "状态": map[string]any{"select": map[string]any{}}, "最后同步": map[string]any{"date": map[string]any{}}}
-	for _, name := range []string{"Daylog ID", "来源", "内容指纹", "时区", "简要记录"} {
-		p[name] = map[string]any{"rich_text": map[string]any{}}
+	return map[string]any{
+		"名称": map[string]any{"title": map[string]any{}},
+		"日期": map[string]any{"date": map[string]any{}},
+		"状态": map[string]any{"select": map[string]any{"options": []any{
+			map[string]any{"name": "已整理", "color": "green"},
+			map[string]any{"name": "待补齐", "color": "yellow"},
+		}}},
 	}
-	for _, name := range []string{"估计秒数", "邻接推断秒数", "关键帧插值秒数", "未估时秒数", "旧版覆盖秒数", "活动数", "已整理段数", "待整理段数", "失败段数", "未封批截图数"} {
-		p[name] = map[string]any{"number": map[string]any{"format": "number"}}
-	}
-	return p
-}
-func activitySchema(daily string) map[string]any {
-	p := map[string]any{"名称": map[string]any{"title": map[string]any{}}, "日期": map[string]any{"date": map[string]any{}}, "时间": map[string]any{"date": map[string]any{}}, "类别": map[string]any{"select": map[string]any{}}, "置信度": map[string]any{"select": map[string]any{}}, "时长状态": map[string]any{"select": map[string]any{}}, "日志": map[string]any{"relation": map[string]any{"data_source_id": daily, "type": "dual_property", "dual_property": map[string]any{}}}}
-	for _, name := range []string{"Daylog ID", "来源", "内容指纹", "日期标识", "任务 ID", "任务", "描述", "动作", "不确定性", "估时区间", "时区", "应用", "来源渠道", "模型", "提示版本"} {
-		p[name] = map[string]any{"rich_text": map[string]any{}}
-	}
-	for _, name := range []string{"估计秒数", "邻接推断秒数", "关键帧插值秒数", "证据图数"} {
-		p[name] = map[string]any{"number": map[string]any{"format": "number"}}
-	}
-	return p
 }
 
-// Only adopt databases carrying our source marker; never repurpose a user's
-// existing database just because its title happens to be "日志".
-func (s *Service) ensureDatabase(ctx context.Context, role, title string, schema map[string]any) (string, string, error) {
-	marker := "Daylog source=" + s.Settings.SourceID + " role=" + role
+func (s *Service) databaseMarker() string {
+	return "Daylog source=" + s.Settings.SourceID + " layout=" + DailyLayout
+}
+
+// Names alone imply no ownership. An existing compatible database must be
+// selected explicitly with --database; fresh setups only adopt their marker.
+func (s *Service) ensureDatabase(ctx context.Context) (map[string]any, error) {
 	find := func() (map[string]any, error) {
-		cursor := ""
-		for {
-			path := "/blocks/" + s.Settings.ParentPage + "/children?page_size=100"
-			if cursor != "" {
-				path += "&start_cursor=" + cursor
+		blocks, err := s.Client.children(ctx, s.Settings.ParentPage)
+		if err != nil {
+			return nil, err
+		}
+		var match map[string]any
+		for _, block := range blocks {
+			if str(block["type"]) != "child_database" {
+				continue
 			}
-			result, err := s.Client.request(ctx, "GET", path, nil)
+			db, err := s.Client.request(ctx, "GET", "/databases/"+str(block["id"]), nil)
 			if err != nil {
 				return nil, err
 			}
-			for _, v := range items(result["results"]) {
-				b := obj(v)
-				if str(b["type"]) != "child_database" {
-					continue
-				}
-				db, err := s.Client.request(ctx, "GET", "/databases/"+str(b["id"]), nil)
-				if err != nil {
-					return nil, err
-				}
-				if plain(db["description"]) == marker {
-					return db, nil
-				}
+			if db["in_trash"] == true || plain(db["description"]) != s.databaseMarker() {
+				continue
 			}
-			if result["has_more"] != true {
-				return nil, nil
+			if match != nil {
+				return nil, &Error{Code: "duplicate"}
 			}
-			next := str(result["next_cursor"])
-			if next == "" || next == cursor {
-				return nil, errors.New("Notion 分页游标无效")
-			}
-			cursor = next
+			match = db
 		}
+		return match, nil
 	}
-	db, err := s.createOnce(ctx, "database:"+role, "/databases", map[string]any{"parent": map[string]any{"type": "page_id", "page_id": s.Settings.ParentPage}, "title": rich(title), "description": rich(marker), "is_inline": false, "initial_data_source": map[string]any{"properties": schema}}, find)
-	if err != nil {
-		return "", "", err
-	}
-	id := str(db["id"])
-	if len(items(db["data_sources"])) == 0 {
-		db, err = s.Client.request(ctx, "GET", "/databases/"+id, nil)
-		if err != nil {
-			return "", "", err
-		}
-	}
-	sources := items(db["data_sources"])
-	if len(sources) != 1 {
-		return "", "", errors.New("Daylog 数据库的数据源不唯一，请检查目标数据库")
-	}
-	source := str(obj(sources[0])["id"])
-	if id == "" || source == "" {
-		return "", "", errors.New("Notion 未返回数据库标识")
-	}
-	return id, source, nil
+	return s.createOnce(ctx, "database:daily-page", "/databases", map[string]any{
+		"parent": map[string]any{"type": "page_id", "page_id": s.Settings.ParentPage},
+		"title":  rich("Daylog"), "description": rich(s.databaseMarker()), "is_inline": false,
+		"initial_data_source": map[string]any{"properties": dailySchema()},
+	}, find)
 }
+
 func (s *Service) Setup(ctx context.Context) error {
+	if s.Settings.Layout != DailyLayout {
+		return errors.New("Notion 仍为旧版双库配置，请重新运行 daylog notion setup")
+	}
 	if err := s.Client.CheckParent(ctx, s.Settings.ParentPage); err != nil {
 		return err
 	}
+	var db map[string]any
 	var err error
-	if s.Settings.DailySource == "" {
-		s.Settings.DailyDatabase, s.Settings.DailySource, err = s.ensureDatabase(ctx, "daily", "Daylog 日志", dailySchema())
-		if err != nil {
-			return err
-		}
-		if err = SaveSettings(s.Root, s.Settings); err != nil {
-			return err
-		}
+	if s.Settings.DailyDatabase == "" {
+		db, err = s.ensureDatabase(ctx)
+	} else {
+		db, err = s.Client.request(ctx, "GET", "/databases/"+s.Settings.DailyDatabase, nil)
 	}
-	if s.Settings.ActivitySource == "" {
-		s.Settings.ActivityDatabase, s.Settings.ActivitySource, err = s.ensureDatabase(ctx, "activities", "Daylog 活动", activitySchema(s.Settings.DailySource))
-		if err != nil {
-			return err
-		}
-		if err = SaveSettings(s.Root, s.Settings); err != nil {
-			return err
-		}
+	if err != nil {
+		return err
+	}
+	if db["in_trash"] == true || !sameID(str(obj(db["parent"])["page_id"]), s.Settings.ParentPage) {
+		return errors.New("Notion 数据库不属于目标页面或已移入回收站，请检查 --database")
+	}
+	sources := items(db["data_sources"])
+	if len(sources) != 1 || str(obj(sources[0])["id"]) == "" {
+		return errors.New("Daylog 数据库的数据源不唯一，请检查目标数据库")
+	}
+	s.Settings.DailyDatabase = str(db["id"])
+	s.Settings.DailySource = str(obj(sources[0])["id"])
+	s.Settings.ActivityDatabase, s.Settings.ActivitySource = "", ""
+	if err = SaveSettings(s.Root, s.Settings); err != nil {
+		return err
 	}
 	if err = s.Check(ctx); err != nil {
 		return err
@@ -131,25 +108,30 @@ func (s *Service) Setup(ctx context.Context) error {
 	s.Settings.Enabled = true
 	return SaveSettings(s.Root, s.Settings)
 }
+
 func (s *Service) Check(ctx context.Context) error {
-	for source, expected := range map[string]map[string]any{s.Settings.DailySource: dailySchema(), s.Settings.ActivitySource: activitySchema(s.Settings.DailySource)} {
-		if source == "" {
-			return errors.New("Notion 数据库尚未配置，请运行 daylog notion setup")
+	if s.Settings.Layout != DailyLayout {
+		return errors.New("Notion 仍为旧版双库配置，请重新运行 daylog notion setup；已有单页库可用 --database 指定")
+	}
+	if s.Settings.DailySource == "" {
+		return errors.New("Notion 数据库尚未配置，请运行 daylog notion setup")
+	}
+	data, err := s.Client.request(ctx, "GET", "/data_sources/"+s.Settings.DailySource, nil)
+	if err != nil {
+		return err
+	}
+	if data["in_trash"] == true {
+		return errors.New("Notion 数据库已移入回收站，请恢复后重试")
+	}
+	properties := obj(data["properties"])
+	for name, schema := range dailySchema() {
+		actual := obj(properties[name])
+		if actual == nil {
+			return fmt.Errorf("Notion 缺少字段「%s」，请恢复字段名称后重试", name)
 		}
-		data, err := s.Client.request(ctx, "GET", "/data_sources/"+source, nil)
-		if err != nil {
-			return err
-		}
-		properties := obj(data["properties"])
-		for name, schema := range expected {
-			actual := obj(properties[name])
-			if actual == nil {
-				return fmt.Errorf("Notion 缺少字段「%s」，请恢复字段名称后重试", name)
-			}
-			for kind := range obj(schema) {
-				if str(actual["type"]) != kind {
-					return fmt.Errorf("Notion 字段「%s」类型不匹配", name)
-				}
+		for kind := range obj(schema) {
+			if str(actual["type"]) != kind {
+				return fmt.Errorf("Notion 字段「%s」类型不匹配", name)
 			}
 		}
 	}
@@ -168,6 +150,9 @@ func (s *Service) query(ctx context.Context, source string, filter map[string]an
 		if err != nil {
 			return nil, err
 		}
+		if str(obj(r["request_status"])["type"]) == "incomplete" {
+			return nil, errors.New("Notion 查询结果不完整，已停止同步以避免重复或遗漏")
+		}
 		for _, v := range items(r["results"]) {
 			all = append(all, obj(v))
 		}
@@ -181,27 +166,13 @@ func (s *Service) query(ctx context.Context, source string, filter map[string]an
 		cursor = next
 	}
 }
-func matchText(name, value string) map[string]any {
-	return map[string]any{"property": name, "rich_text": map[string]any{"equals": value}}
-}
-func uniqueRows(rows []map[string]any) (map[string]map[string]any, error) {
-	m := map[string]map[string]any{}
-	for _, r := range rows {
-		key := propertyText(r, "Daylog ID")
-		if key == "" {
-			continue
-		}
-		if m[key] != nil {
-			return nil, &Error{Code: "duplicate"}
-		}
-		m[key] = r
-	}
-	return m, nil
-}
+
 func (s *Service) syncKey(parts ...string) string {
 	return "daylog:" + s.Settings.SourceID + ":" + strings.Join(parts, ":")
 }
-
+func sameID(a, b string) bool {
+	return a != "" && strings.EqualFold(strings.ReplaceAll(a, "-", ""), strings.ReplaceAll(b, "-", ""))
+}
 func (c *Client) CheckParent(ctx context.Context, id string) error {
 	normalized, err := ParsePage(id)
 	if err != nil {
@@ -211,7 +182,7 @@ func (c *Client) CheckParent(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if page["in_trash"] == true || page["archived"] == true {
+	if page["in_trash"] == true || page["is_archived"] == true || page["archived"] == true {
 		return errors.New("Notion 目标页面已归档或移入回收站，请恢复后重试")
 	}
 	return nil

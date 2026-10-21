@@ -80,8 +80,14 @@ func (s *Service) createOnce(ctx context.Context, key, path string, body any, fi
 	if r.ID != "" {
 		found, getErr := s.Client.request(ctx, "GET", path+"/"+r.ID, nil)
 		if getErr == nil && found != nil {
-			if path == "/pages" && propertyText(found, "Daylog ID") != key {
-				return nil, &Error{Code: "duplicate"}
+			if path == "/pages" {
+				want := obj(body)
+				date := func(page map[string]any) string {
+					return str(obj(obj(obj(page["properties"])["日期"])["date"])["start"])
+				}
+				if !sameID(str(obj(found["parent"])["data_source_id"]), str(obj(want["parent"])["data_source_id"])) || date(found) != date(want) {
+					return nil, &Error{Code: "duplicate"}
+				}
 			}
 			return found, nil
 		}

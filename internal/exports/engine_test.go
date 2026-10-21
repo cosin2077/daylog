@@ -214,3 +214,29 @@ func TestBadLocalDateDoesNotStarveHealthySync(t *testing.T) {
 		t.Fatal("bad day blocked healthy date", delivered, state)
 	}
 }
+
+func TestManualDateBeforeSinceIsUpdatedWithoutBackfillingOtherHistory(t *testing.T) {
+	manual := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	since := manual.AddDate(0, 0, 10)
+	var delivered []string
+	revision := 0
+	e := Engine{Root: t.TempDir(), Now: func() time.Time { return since.Add(time.Hour) },
+		Load: func(d time.Time) (Day, error) {
+			return Day{Date: d.Format("2006-01-02"), AnalyzedBatches: 1, PendingBatches: revision}, nil
+		},
+		Sink: sinkFunc(func(_ context.Context, d Day) (string, error) {
+			delivered = append(delivered, d.Date)
+			return "url", nil
+		})}
+	if _, err := e.Sync(context.Background(), manual, true); err != nil {
+		t.Fatal(err)
+	}
+	delivered = nil
+	revision = 1
+	if err := e.RunDue(context.Background(), since, since.AddDate(0, 0, 1), 90); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivered) != 2 || delivered[0] != "2026-10-10" || delivered[1] != "2026-10-20" {
+		t.Fatal("manual date lost or unrelated older days exported", delivered)
+	}
+}

@@ -31,7 +31,7 @@ func Run(ctx context.Context, root string, secrets SecretStore) {
 			return
 		}
 		settings, err := ReadSettings(root)
-		if err == nil && settings.Enabled {
+		if err == nil && settings.Enabled && settings.Layout == DailyLayout {
 			zone, zoneErr := time.LoadLocation(settings.Timezone)
 			since, dateErr := time.Time{}, zoneErr
 			if zoneErr == nil {

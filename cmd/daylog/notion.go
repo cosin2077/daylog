@@ -20,19 +20,21 @@ import (
 	"golang.org/x/term"
 )
 
-const notionHelp = `daylog notion setup [--page Notion页面链接] [--token-stdin] [--timezone Asia/Shanghai] [--since YYYY-MM-DD]
+const notionHelp = `daylog notion setup [--page Notion页面链接] [--database 已有Daylog库链接] [--token-stdin] [--timezone Asia/Shanghai] [--since YYYY-MM-DD]
 daylog notion status [--json]
 daylog notion check [--json]
-daylog notion sync [--date YYYY-MM-DD] [--dry-run] [--retry-uncertain] [--json]
+daylog notion sync [--date YYYY-MM-DD | --yes] [--dry-run] [--retry-uncertain] [--json]
 daylog notion disable [--json]
 
-setup 交互式隐藏输入 Token，并在目标页面下建立「Daylog 日志」「Daylog 活动」数据库。
+setup 隐藏输入 Token，在目标页下建立一个 Daylog 数据库，每天一页；只有名称、日期、状态三个字段。--database 可指定已有的兼容库。
 Token 只存系统凭据存储，不写入配置、输出或命令历史；脚本请用 --token-stdin 并指定 --page。
-默认同步昨天，此后后台每天本地时间 00:00 同步前一天，开机/联网后补传；需保持 Daylog 后台运行，可用 daylog start --login。
+手动 sync 默认今天，显示日期后需要确认；--date 显式指定日期可直接执行，--yes 明确接受默认今天。脚本须使用 --date 或 --yes。
+后台每天本地时间 00:00 同步前一天，开机/联网后补传；需保持 Daylog 后台运行，可用 daylog start --login。
 时区在 setup 时保存，跨午夜、休眠或补传都使用记录所属日期作为标题。
 已整理活动、估时与来源、未知区间、待整理数量都会同步；不上传截图、不额外调用模型。
 --dry-run 只输出本地结构化内容，不联网。--retry-uncertain 仅在确认云端没有该条记录时使用。
-网页正文留给人工复盘，后续同步只更新 Daylog 管理的属性。普通联网失败会自动退避，权限/额度问题需修正后手动 sync 或重新 setup。
+活动按时间写在正文。同一天的手动、自动和补齐会更新同一页的 Daylog 活动记录，保留「我的备注」；本地历史缺失时保留较完整的云端记录。
+普通联网失败会自动退避，权限/额度问题需修正后手动 sync 或重新 setup。
 `
 
 type nativeNotionSecrets struct{}
@@ -51,17 +53,19 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 	}
 	f := flags("notion " + op)
 	asJSON := f.Bool("json", false, "JSON output")
-	page, zone, since, date := "", "", "", ""
-	stdin, dryRun, retryUncertain := false, false, false
+	page, database, zone, since, date := "", "", "", "", ""
+	stdin, dryRun, retryUncertain, yes := false, false, false, false
 	if op == "setup" {
 		f.StringVar(&page, "page", "", "Notion parent page URL")
+		f.StringVar(&database, "database", "", "existing daily-page database URL")
 		f.StringVar(&zone, "timezone", notion.SystemTimezone(), "IANA timezone")
 		f.StringVar(&since, "since", "", "first date, defaults to yesterday")
 		f.BoolVar(&stdin, "token-stdin", false, "read token from stdin without echo")
 		f.BoolVar(&retryUncertain, "retry-uncertain", false, "explicitly retry an uncertain create after checking Notion")
 	}
 	if op == "sync" {
-		f.StringVar(&date, "date", "", "source date; defaults to yesterday")
+		f.StringVar(&date, "date", "", "source date; defaults to today with confirmation")
+		f.BoolVar(&yes, "yes", false, "accept the default date without a prompt")
 		f.BoolVar(&dryRun, "dry-run", false, "preview without network or credentials")
 		f.BoolVar(&retryUncertain, "retry-uncertain", false, "explicitly retry an uncertain create after checking Notion")
 	}
@@ -83,10 +87,13 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 		}
 		defer platform.Unlock(lock)
 	}
-	sinceExplicit := false
+	sinceExplicit, dateExplicit := false, false
 	f.Visit(func(value *flag.Flag) {
 		if value.Name == "since" {
 			sinceExplicit = true
+		}
+		if value.Name == "date" {
+			dateExplicit = true
 		}
 	})
 	settings, readErr := notion.ReadSettings(store.Root)
@@ -101,7 +108,11 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 		if err != nil {
 			return err
 		}
-		return result(*asJSON, map[string]any{"configured": true, "settings": settings, "sync": state}, fmt.Sprintf("Notion 自动同步：%t · 时区 %s · 每天 00:00 同步前一天\n目标页面：https://www.notion.so/%s\n已记录 %d 个日期的同步状态；用 --json 查看每个日期的成功、失败与下次重试时间。", settings.Enabled, settings.Timezone, settings.ParentPage, len(state.Days)))
+		message := fmt.Sprintf("Notion 自动同步：%t · 时区 %s · 每天 00:00 同步前一天\n目标页面：https://www.notion.so/%s\n已记录 %d 个日期的同步状态；用 --json 查看每个日期的成功、失败与下次重试时间。", settings.Enabled && settings.Layout == notion.DailyLayout, settings.Timezone, settings.ParentPage, len(state.Days))
+		if settings.Layout != notion.DailyLayout {
+			message += "\n当前为旧版双库配置，需重新运行 daylog notion setup；已有单页库可用 --database 指定。"
+		}
+		return result(*asJSON, map[string]any{"configured": true, "needs_setup": settings.Layout != notion.DailyLayout, "settings": settings, "sync": state}, message)
 	}
 	if op == "setup" {
 		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
@@ -177,13 +188,20 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 		}
 		if readErr == nil && settings.ParentPage == proposed.ParentPage {
 			proposed.SourceID = settings.SourceID
-			proposed.DailyDatabase = settings.DailyDatabase
-			proposed.DailySource = settings.DailySource
-			proposed.ActivityDatabase = settings.ActivityDatabase
-			proposed.ActivitySource = settings.ActivitySource
+			if settings.Layout == notion.DailyLayout {
+				proposed.DailyDatabase = settings.DailyDatabase
+				proposed.DailySource = settings.DailySource
+			}
 			if !sinceExplicit {
 				proposed.Since = settings.Since
 			}
+		}
+		if database != "" {
+			proposed.DailyDatabase, err = notion.ParsePage(database)
+			if err != nil {
+				return err
+			}
+			proposed.DailySource = ""
 		}
 		client := notion.NewClient(token)
 		preflightCtx, preflightCancel := context.WithTimeout(ctx, 30*time.Second)
@@ -204,7 +222,7 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 		if err = service.Setup(setupCtx); err != nil {
 			return err
 		}
-		return result(*asJSON, map[string]any{"configured": true, "enabled": true, "settings": service.Settings}, "Notion 配置完成。每天 00:00 同步前一天，失败后自动补同步。请保持 Daylog 后台运行；登录自动启动：daylog start --login。首次可用 daylog notion sync 同步昨天。")
+		return result(*asJSON, map[string]any{"configured": true, "enabled": true, "settings": service.Settings}, "Notion 单页日志配置完成。每天 00:00 同步前一天，失败后自动补同步。请保持 Daylog 后台运行；登录自动启动：daylog start --login。手动 daylog notion sync 默认今天并确认日期，同一天后续更新原页面。")
 	}
 	if op == "disable" {
 		if readErr != nil {
@@ -230,18 +248,41 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 		return errors.New("Notion 时区无效")
 	}
 	if op == "sync" && date == "" {
-		date = time.Now().In(location).AddDate(0, 0, -1).Format("2006-01-02")
+		if dateExplicit {
+			return errors.New("日期不能为空，请用 --date YYYY-MM-DD 指定")
+		}
+		date = time.Now().In(location).Format("2006-01-02")
 	}
-	if op == "sync" && dryRun {
-		day, err := exports.ValidateDay(date, location)
+	var day time.Time
+	if op == "sync" {
+		day, err = exports.ValidateDay(date, location)
 		if err != nil {
 			return err
 		}
+		now := time.Now().In(location)
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location)
+		if day.After(today) {
+			return errors.New("不能同步未来日期，请选择今天或更早日期")
+		}
+	}
+	if op == "sync" && dryRun {
 		snapshot, err := exports.LoadDay(store, day)
 		if err != nil {
 			return err
 		}
 		return output(snapshot)
+	}
+	if settings.Layout != notion.DailyLayout {
+		return errors.New("Notion 仍为旧版双库配置，请重新运行 daylog notion setup；已有单页库可用 --database 指定")
+	}
+	if op == "sync" && !dateExplicit && !yes {
+		confirmed, err := confirmNotionDate(os.Stdin, os.Stderr, date, location.String(), term.IsTerminal(int(os.Stdin.Fd())))
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			return result(*asJSON, map[string]any{"state": "cancelled", "date": date}, "已取消，未同步。")
+		}
 	}
 	token := (nativeNotionSecrets{}).Get(settings.SecretName())
 	if token == "" {
@@ -254,13 +295,6 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 		}
 		return result(*asJSON, map[string]any{"connected": true, "schema_valid": true}, "Notion 连接、数据库字段与读取权限检查通过；写权限会在同步时校验。")
 	}
-	day, err := exports.ValidateDay(date, location)
-	if err != nil {
-		return err
-	}
-	if !day.Before(time.Date(time.Now().In(location).Year(), time.Now().In(location).Month(), time.Now().In(location).Day(), 0, 0, 0, 0, location)) {
-		return errors.New("只同步已结束的日期，请选择昨天或更早日期")
-	}
 	syncCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	job, err := service.Engine().Sync(syncCtx, day, true)
@@ -268,4 +302,20 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 		return err
 	}
 	return result(*asJSON, job, "Notion 同步完成："+date+"\n"+job.URL)
+}
+
+func confirmNotionDate(input io.Reader, output io.Writer, date, zone string, interactive bool) (bool, error) {
+	if !interactive {
+		return false, errors.New("手动同步默认今天，需要终端确认日期；脚本请显式使用 --date YYYY-MM-DD，或用 --yes 接受默认今天")
+	}
+	fmt.Fprintf(output, "将同步 %s（%s）的当前记录到 Notion；今天尚未结束，后续会更新同一页面。继续？[y/N] ", date, zone)
+	line, err := bufio.NewReader(io.LimitReader(input, 4096)).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, errors.New("无法读取同步确认，未执行同步")
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes", "是":
+		return true, nil
+	}
+	return false, nil
 }

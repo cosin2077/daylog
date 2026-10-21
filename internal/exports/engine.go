@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"time"
 
@@ -130,8 +131,21 @@ func (e Engine) RunDue(ctx context.Context, start, now time.Time, retention int)
 				return err
 			}
 		}
-		count := 0
+		// A manually pushed older date remains eligible for late updates even
+		// before --since, without exporting unrequested intervening history.
+		var dates []time.Time
 		for day := start; day.Before(today); day = day.AddDate(0, 0, 1) {
+			dates = append(dates, day)
+		}
+		for key := range state.Days {
+			day, _ := time.ParseInLocation("2006-01-02", key, now.Location())
+			if day.Before(start) && !day.Before(cutoff) && day.Before(today) {
+				dates = append(dates, day)
+			}
+		}
+		sort.Slice(dates, func(i, j int) bool { return dates[i].Before(dates[j]) })
+		count := 0
+		for _, day := range dates {
 			if err = ctx.Err(); err != nil {
 				return err
 			}
@@ -155,6 +169,7 @@ func (e Engine) RunDue(ctx context.Context, start, now time.Time, retention int)
 				}
 				continue
 			}
+			snapshot.Ongoing = false // RunDue only exports ended calendar days.
 			if !snapshot.HasData() || job.Hash == snapshot.Hash() {
 				continue
 			}
@@ -189,6 +204,7 @@ func (e Engine) Sync(ctx context.Context, day time.Time, force bool) (Job, error
 		if e.Now != nil {
 			now = e.Now()
 		}
+		snapshot.Ongoing = now.In(day.Location()).Before(day.AddDate(0, 0, 1))
 		e.deliver(ctx, &state, snapshot, now, force)
 		result = state.Days[snapshot.Date]
 		if err = journal.WriteJSON(filepath.Join(e.Root, "sync-state.json"), state); err != nil {

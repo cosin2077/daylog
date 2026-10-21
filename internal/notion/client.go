@@ -169,8 +169,6 @@ func rich(text string) []any {
 	}
 	return result
 }
-func textProperty(text string) map[string]any { return map[string]any{"rich_text": rich(text)} }
-func numberProperty(n int64) map[string]any   { return map[string]any{"number": n} }
 func plain(v any) string {
 	var b strings.Builder
 	for _, item := range items(v) {
@@ -182,7 +180,4 @@ func plain(v any) string {
 		b.WriteString(s)
 	}
 	return b.String()
-}
-func propertyText(page map[string]any, key string) string {
-	return plain(obj(obj(page["properties"])[key])["rich_text"])
 }

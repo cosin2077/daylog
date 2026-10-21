@@ -37,6 +37,7 @@ type Activity struct {
 }
 
 type Day struct {
+	Ongoing               bool       `json:"ongoing"`
 	DraftFrames           int        `json:"draft_frames"`
 	LegacyCoverageSeconds int64      `json:"legacy_coverage_seconds"`
 	SourceBatches         []string   `json:"source_batches"`
@@ -72,6 +73,7 @@ func LoadDay(s *journal.Store, day time.Time) (Day, error) {
 		return Day{}, err
 	}
 	result := Day{DraftFrames: p.DraftFrames, LegacyCoverageSeconds: p.LegacyCoverageSeconds, SchemaVersion: 1, Date: start.Format("2006-01-02"), Timezone: start.Location().String(), EstimatedSeconds: p.EstimatedSeconds, InferredSeconds: p.InferredSeconds, InterpolatedSeconds: p.InterpolatedSeconds, UnknownSeconds: p.UnknownSeconds, AnalyzedBatches: p.AnalyzedBatches, PendingBatches: p.PendingBatches, FailedBatches: p.FailedBatches, Activities: []Activity{}, SourceBatches: []string{}}
+	result.Ongoing = time.Now().In(start.Location()).Before(end)
 	for _, r := range reports {
 		result.SourceBatches = append(result.SourceBatches, r.BatchID)
 		for index, c := range r.Cards {

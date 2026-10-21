@@ -25,13 +25,16 @@ type fakeAPI struct {
 	sources                  map[string]map[string]any
 	pages                    map[string]map[string]any
 	children                 map[string][]any
+	markdown                 map[string]string
+	markdownPatches          int
+	dropMarkdown, truncated  bool
 	posts, patches, requests int
 	dropNext, quota          bool
 }
 
 func fakeClient(t *testing.T) (*Client, *fakeAPI) {
 	t.Helper()
-	f := &fakeAPI{databases: map[string]map[string]any{}, sources: map[string]map[string]any{}, pages: map[string]map[string]any{}, children: map[string][]any{}}
+	f := &fakeAPI{databases: map[string]map[string]any{}, sources: map[string]map[string]any{}, pages: map[string]map[string]any{}, children: map[string][]any{}, markdown: map[string]string{}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -54,7 +57,7 @@ func fakeClient(t *testing.T) (*Client, *fakeAPI) {
 			send(map[string]any{"results": f.children[id], "has_more": false})
 		case path == "/databases" && r.Method == "POST":
 			id, source := newID(), newID()
-			db := map[string]any{"id": id, "description": body["description"], "data_sources": []any{map[string]any{"id": source}}}
+			db := map[string]any{"id": id, "description": body["description"], "parent": body["parent"], "data_sources": []any{map[string]any{"id": source}}}
 			f.databases[id] = db
 			props := map[string]any{}
 			for name, v := range obj(obj(body["initial_data_source"])["properties"]) {
@@ -77,10 +80,11 @@ func fakeClient(t *testing.T) (*Client, *fakeAPI) {
 			source := strings.TrimSuffix(strings.TrimPrefix(path, "/data_sources/"), "/query")
 			filter := obj(body["filter"])
 			property := str(filter["property"])
-			value := str(obj(filter["rich_text"])["equals"])
+			value := str(obj(filter["date"])["equals"])
 			var ids []string
 			for id, page := range f.pages {
-				if str(obj(page["parent"])["data_source_id"]) == source && propertyText(page, property) == value {
+				actual := str(obj(obj(obj(page["properties"])[property])["date"])["start"])
+				if str(obj(page["parent"])["data_source_id"]) == source && actual == value {
 					ids = append(ids, id)
 				}
 			}
@@ -106,6 +110,7 @@ func fakeClient(t *testing.T) (*Client, *fakeAPI) {
 			page := map[string]any{"id": id, "url": "https://notion.so/" + id, "properties": body["properties"], "parent": body["parent"]}
 			f.pages[id] = page
 			f.children[id] = items(body["children"])
+			f.markdown[id] = strings.ReplaceAll(str(body["markdown"]), "\n\n", "\n")
 			f.posts++
 			if f.dropNext {
 				f.dropNext = false
@@ -114,6 +119,32 @@ func fakeClient(t *testing.T) (*Client, *fakeAPI) {
 				return
 			}
 			send(page)
+		case strings.HasPrefix(path, "/pages/") && strings.HasSuffix(path, "/markdown"):
+			id := strings.TrimSuffix(strings.TrimPrefix(path, "/pages/"), "/markdown")
+			if r.Method == "PATCH" {
+				if body["type"] != "update_content" || body["replace_content"] != nil {
+					t.Error("whole page body overwritten")
+				}
+				for _, item := range items(obj(body["update_content"])["content_updates"]) {
+					edit := obj(item)
+					old := str(edit["old_str"])
+					if old == "" || strings.Count(f.markdown[id], old) != 1 {
+						w.WriteHeader(400)
+						send(map[string]any{"code": "validation_error"})
+						return
+					}
+					f.markdown[id] = strings.Replace(f.markdown[id], old, str(edit["new_str"]), 1)
+				}
+				f.markdown[id] = strings.ReplaceAll(f.markdown[id], "\n\n", "\n")
+				f.markdownPatches++
+				if f.dropMarkdown {
+					f.dropMarkdown = false
+					conn, _, _ := w.(http.Hijacker).Hijack()
+					conn.Close()
+					return
+				}
+			}
+			send(map[string]any{"object": "page_markdown", "id": id, "markdown": f.markdown[id], "truncated": f.truncated, "unknown_block_ids": []any{}})
 		case strings.HasPrefix(path, "/pages/") && r.Method == "GET":
 			send(f.pages[strings.TrimPrefix(path, "/pages/")])
 		case strings.HasPrefix(path, "/pages/") && r.Method == "PATCH":
@@ -174,7 +205,7 @@ func TestSetupIdempotentAndCompleteQuantitativeSync(t *testing.T) {
 	if err := s.Setup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.databases) != 2 {
+	if len(f.databases) != 1 {
 		t.Fatal("duplicate setup", len(f.databases))
 	}
 	day := sampleDay(121)
@@ -183,30 +214,32 @@ func TestSetupIdempotentAndCompleteQuantitativeSync(t *testing.T) {
 	if err != nil || url == "" {
 		t.Fatal(url, err)
 	}
-	if f.posts != 122 {
-		t.Fatal("truncated activities", f.posts)
+	if f.posts != 1 {
+		t.Fatal("activities were split into pages", f.posts)
 	}
 	var daily map[string]any
 	for _, page := range f.pages {
-		if strings.Contains(propertyText(page, "Daylog ID"), ":day:") {
-			daily = page
-		}
+		daily = page
 	}
-	if plain(obj(obj(daily["properties"])["名称"])["title"]) != "2026-10-18 · 日报" {
+	if plain(obj(obj(daily["properties"])["名称"])["title"]) != "2026-10-18 · Daylog" || len(obj(daily["properties"])) != 3 {
 		t.Fatal("execution date used as title")
 	}
 
-	if str(obj(obj(obj(daily["properties"])["状态"])["select"])["name"]) != "整理中" {
+	if str(obj(obj(obj(daily["properties"])["状态"])["select"])["name"]) != "待补齐" {
 		t.Fatal("incomplete day marked final")
 	}
 	id := str(daily["id"])
-	f.children[id] = append(f.children[id], paragraph("用户的人工复盘"))
-	before := len(f.children[id])
+	f.markdown[id] += "\n用户的人工复盘\n"
+	before := f.markdown[id]
+	if strings.Count(before, "### ") != 121 {
+		t.Fatal("body activities truncated")
+	}
+	patches := f.markdownPatches
 	posts := f.posts
 	if _, err = s.Deliver(context.Background(), day); err != nil {
 		t.Fatal(err)
 	}
-	if f.posts != posts || len(f.children[id]) != before {
+	if f.posts != posts || f.markdown[id] != before || f.markdownPatches != patches {
 		t.Fatal("duplicate rows or user notes changed")
 	}
 	day.PendingBatches = 0
@@ -214,7 +247,7 @@ func TestSetupIdempotentAndCompleteQuantitativeSync(t *testing.T) {
 	if _, err = s.Deliver(context.Background(), day); err != nil {
 		t.Fatal(err)
 	}
-	if f.posts != posts || str(obj(obj(obj(daily["properties"])["状态"])["select"])["name"]) != "已同步" {
+	if f.posts != posts || str(obj(obj(obj(daily["properties"])["状态"])["select"])["name"]) != "已整理" || !strings.Contains(f.markdown[id], "补充辨认出的事实") || !strings.Contains(f.markdown[id], "用户的人工复盘") {
 		t.Fatal("late analysis created duplicate or not finalized")
 	}
 	raw, _ := os.ReadFile(s.receiptFile(s.syncKey("day", day.Date, day.Timezone)))
@@ -237,7 +270,7 @@ func TestCommittedCreateWithLostResponseReconciles(t *testing.T) {
 	if _, err := s.Deliver(context.Background(), day); err != nil {
 		t.Fatal(err)
 	}
-	if f.postCount() != 2 {
+	if f.postCount() != 1 {
 		t.Fatal("duplicate day after lost response", f.postCount())
 	}
 }
@@ -323,7 +356,7 @@ func (f *fakeAPI) postCount() int { f.mu.Lock(); defer f.mu.Unlock(); return f.p
 func TestSuccessfulReceiptUsesKnownIDWhenQueryMisses(t *testing.T) {
 	s, f := setupFake(t)
 	key := s.syncKey("day", "2026-10-18", "Asia/Shanghai")
-	body := map[string]any{"parent": map[string]any{"data_source_id": s.Settings.DailySource}, "properties": s.baseProperties(key, "hash")}
+	body := map[string]any{"parent": map[string]any{"data_source_id": s.Settings.DailySource}, "properties": dayProperties(sampleDay(1), "待补齐")}
 	find := func() (map[string]any, error) { return nil, nil }
 	first, err := s.createOnce(context.Background(), key, "/pages", body, find)
 	if err != nil {
@@ -339,7 +372,7 @@ func TestCancelledBeforeSendDoesNotPoisonReceipt(t *testing.T) {
 	s.Client.last = time.Now()
 	s.Client.interval = time.Hour
 	key := s.syncKey("day", "2026-10-18", "Asia/Shanghai")
-	body := map[string]any{"properties": s.baseProperties(key, "hash")}
+	body := map[string]any{"parent": map[string]any{"data_source_id": s.Settings.DailySource}, "properties": dayProperties(sampleDay(1), "待补齐")}
 	find := func() (map[string]any, error) { return nil, nil }
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()

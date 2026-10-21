@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"daylog/internal/notion"
 )
 
 func TestNotionStatusAndDryRunDoNotRequireSecrets(t *testing.T) {
@@ -33,6 +37,50 @@ func TestNotionStatusAndDryRunDoNotRequireSecrets(t *testing.T) {
 	}
 	if _, err = commandOutput(t, "--data", s.Root, "notion", "check"); err == nil || !strings.Contains(err.Error(), "setup") {
 		t.Fatal(err)
+	}
+}
+
+func TestNotionDefaultDateConfirmationAndNoninteractiveGuard(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{{"y\n", true}, {"YES\n", true}, {"是\n", true}, {"\n", false}, {"n\n", false}, {"", false}} {
+		var prompt bytes.Buffer
+		got, err := confirmNotionDate(strings.NewReader(tc.input), &prompt, "2026-10-21", "Asia/Shanghai", true)
+		if err != nil || got != tc.want || !strings.Contains(prompt.String(), "2026-10-21") || !strings.Contains(prompt.String(), "[y/N]") {
+			t.Fatal(tc, got, prompt.String(), err)
+		}
+	}
+	s := configStore(t)
+	settings, _ := notion.NewSettings("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Asia/Shanghai", "2026-10-18")
+	if err := notion.SaveSettings(s.Root, settings); err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stdin
+	r, w, _ := os.Pipe()
+	w.Close()
+	os.Stdin = r
+	defer func() { os.Stdin = original; r.Close() }()
+	if _, err := commandOutput(t, "--data", s.Root, "notion", "sync", "--json"); err == nil || !strings.Contains(err.Error(), "--date") || !strings.Contains(err.Error(), "--yes") {
+		t.Fatal("noninteractive default bypassed confirmation", err)
+	}
+	if _, err := commandOutput(t, "--data", s.Root, "notion", "sync", "--yes"); err == nil || !strings.Contains(err.Error(), "凭证") {
+		t.Fatal("explicit yes still prompted or rejected today", err)
+	}
+	if _, err := commandOutput(t, "--data", s.Root, "notion", "sync", "--date", ""); err == nil || !strings.Contains(err.Error(), "日期不能为空") {
+		t.Fatal("empty explicit date became today", err)
+	}
+	if _, err := commandOutput(t, "--data", s.Root, "notion", "sync", "--date", "2099-01-01"); err == nil || !strings.Contains(err.Error(), "未来") {
+		t.Fatal("future date accepted", err)
+	}
+	raw, err := commandOutput(t, "--data", s.Root, "notion", "sync", "--dry-run")
+	var preview struct {
+		Date    string
+		Ongoing bool
+	}
+	zone, _ := time.LoadLocation("Asia/Shanghai")
+	if err != nil || json.Unmarshal(raw, &preview) != nil || preview.Date != time.Now().In(zone).Format("2006-01-02") || !preview.Ongoing {
+		t.Fatal("dry-run did not default to today without credentials or confirmation", string(raw), err)
 	}
 }
 func TestNotionSetupRejectsUnsafeTargetBeforeCredentialWrite(t *testing.T) {
