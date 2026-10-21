@@ -284,22 +284,31 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 			return result(*asJSON, map[string]any{"state": "cancelled", "date": date}, "已取消，未同步。")
 		}
 	}
-	token := (nativeNotionSecrets{}).Get(settings.SecretName())
-	if token == "" {
-		return errors.New("无法读取 Notion 凭证，请检查系统凭据存储或重新运行 daylog notion setup")
-	}
-	service := notion.Service{Root: store.Root, Settings: settings, Client: notion.NewClient(token), AllowUncertain: retryUncertain}
+	label := "正在同步到 Notion"
 	if op == "check" {
-		if err = service.Check(ctx); err != nil {
-			return err
-		}
-		return result(*asJSON, map[string]any{"connected": true, "schema_valid": true}, "Notion 连接、数据库字段与读取权限检查通过；写权限会在同步时校验。")
+		label = "正在检查 Notion 连接"
 	}
-	syncCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	job, err := service.Engine().Sync(syncCtx, day, true)
+	var job exports.Job
+	err = withProgress(!*asJSON, label, func() error {
+		token := (nativeNotionSecrets{}).Get(settings.SecretName())
+		if token == "" {
+			return errors.New("无法读取 Notion 凭证，请检查系统凭据存储或重新运行 daylog notion setup")
+		}
+		service := notion.Service{Root: store.Root, Settings: settings, Client: notion.NewClient(token), AllowUncertain: retryUncertain}
+		if op == "check" {
+			return service.Check(ctx)
+		}
+		syncCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		var syncErr error
+		job, syncErr = service.Engine().Sync(syncCtx, day, true)
+		return syncErr
+	})
 	if err != nil {
 		return err
+	}
+	if op == "check" {
+		return result(*asJSON, map[string]any{"connected": true, "schema_valid": true}, "Notion 连接、数据库字段与读取权限检查通过；写权限会在同步时校验。")
 	}
 	return result(*asJSON, job, "Notion 同步完成："+date+"\n"+job.URL)
 }

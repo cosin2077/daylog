@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -100,6 +101,48 @@ func TestNotionHelpHasNoDataSideEffects(t *testing.T) {
 		out, err := commandOutput(t, args...)
 		if err != nil || !strings.Contains(string(out), "--token-stdin") || !strings.Contains(string(out), "00:00") {
 			t.Fatal(string(out), err)
+		}
+	}
+}
+
+func TestNotionProgressKeepsJSONAndFailureOutputClean(t *testing.T) {
+	originalStderr := os.Stderr
+	defer func() { os.Stderr = originalStderr }()
+	s := configStore(t)
+	settings, _ := notion.NewSettings("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Asia/Shanghai", "2026-10-18")
+	if err := notion.SaveSettings(s.Root, settings); err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range []string{"sync", "check"} {
+		for _, asJSON := range []bool{false, true} {
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { r.Close(); w.Close() })
+			original := os.Stderr
+			os.Stderr = w
+			args := []string{"--data", s.Root, "notion", op}
+			if op == "sync" {
+				args = append(args, "--yes")
+			}
+			if asJSON {
+				args = append(args, "--json")
+			}
+			stdout, commandErr := commandOutput(t, args...)
+			os.Stderr = original
+			w.Close()
+			stderr, _ := io.ReadAll(r)
+			r.Close()
+			if commandErr == nil || !strings.Contains(commandErr.Error(), "凭证") || len(stdout) != 0 {
+				t.Fatal("missing credential result changed", commandErr, string(stdout))
+			}
+			if asJSON && len(stderr) != 0 {
+				t.Fatal("JSON caller received progress output", string(stderr))
+			}
+			if !asJSON && (!strings.Contains(string(stderr), "Notion") || strings.Contains(string(stderr), "\x1b")) {
+				t.Fatal("non-TTY caller lost progress or received ANSI", string(stderr))
+			}
 		}
 	}
 }
