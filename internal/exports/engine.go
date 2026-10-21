@@ -248,14 +248,17 @@ func (e Engine) deliver(ctx context.Context, state *State, day Day, now time.Tim
 	if !force && job.Hash == day.Hash() {
 		return
 	}
+	// Persist the attempted coverage before sending. A remote commit may
+	// outlive a lost response or local process crash; later retries must not
+	// replace it with a snapshot missing those sources.
+	if saveErr := e.writeManifest(day.Date, day.SourceBatches); saveErr != nil {
+		job.LastError = "无法保存本地同步来源索引，未更新云端记录"
+		job.NextAttempt = now.Add(time.Minute)
+		state.Days[day.Date] = job
+		return
+	}
 	url, err := e.Sink.Deliver(ctx, day)
 	if err == nil {
-		if saveErr := e.writeManifest(day.Date, day.SourceBatches); saveErr != nil {
-			job.LastError = "远端已写入，但本地同步来源索引保存失败，将稍后重新核验"
-			job.NextAttempt = now.Add(time.Minute)
-			state.Days[day.Date] = job
-			return
-		}
 		job.Hash = day.Hash()
 		job.SourceBatches = nil
 		for key, old := range state.Days {

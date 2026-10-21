@@ -17,6 +17,7 @@ const recordHeading = "## Daylog 活动记录"
 const notesHeading = "## 我的备注"
 
 var markdownEscapes = strings.NewReplacer("\\", "\\\\", "`", "\\`", "*", "\\*", "_", "\\_", "[", "\\[", "]", "\\]", "<", "&lt;", ">", "&gt;", "#", "\\#")
+var markdownAutoLinks = regexp.MustCompile(`\[(https?://[^\]\n]+)\]\((https?://[^)\n]+)\)`)
 
 func readableText(value string) string {
 	return markdownEscapes.Replace(strings.Join(strings.Fields(value), " "))
@@ -103,6 +104,15 @@ func renderDay(day exports.Day) string {
 }
 
 func canonicalMarkdown(value string) string {
+	// Notion linkifies bare URLs on readback. Keep the literal text when the
+	// generated link label and target are identical; no information is lost.
+	value = markdownAutoLinks.ReplaceAllStringFunc(value, func(link string) string {
+		parts := markdownAutoLinks.FindStringSubmatch(link)
+		if parts[1] == parts[2] {
+			return parts[1]
+		}
+		return link
+	})
 	var lines []string
 	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
 		if line = strings.TrimSpace(line); line != "" {

@@ -64,17 +64,31 @@ func writeReceipts(path string, records map[string]receipt) error {
 	return journal.WriteJSON(path, records)
 }
 func (s *Service) createOnce(ctx context.Context, key, path string, body any, find func() (map[string]any, error)) (map[string]any, error) {
-	if found, err := find(); err != nil {
-		return nil, err
-	} else if found != nil {
-		return found, nil
-	}
 	file := s.receiptFile(key)
 	records, err := readReceipts(file)
 	if err != nil {
 		return nil, err
 	}
 	r := records[key]
+	if found, err := find(); err != nil {
+		return nil, err
+	} else if found != nil {
+		if path == "/pages" {
+			if r.ID == "" && !r.Pending {
+				return nil, &Error{Code: "unknown_owner"}
+			}
+			if r.ID != "" && !sameID(r.ID, str(found["id"])) {
+				return nil, &Error{Code: "duplicate"}
+			}
+			// A query can reconcile a lost create response. Save the confirmed
+			// page identity before any further update of that page.
+			records[key] = receipt{ID: str(found["id"])}
+			if err = writeReceipts(file, records); err != nil {
+				return nil, err
+			}
+		}
+		return found, nil
+	}
 	// A successful receipt matters too: a query may temporarily omit a page.
 	// Retrieve its known ID before considering another create.
 	if r.ID != "" {

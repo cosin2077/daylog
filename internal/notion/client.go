@@ -46,6 +46,8 @@ func (e *Error) Error() string {
 		return "Notion 写入结果尚未确认，稍后将自动核验；若确认远端不存在，可用 --retry-uncertain 重试"
 	case "duplicate":
 		return "Notion 中存在重复的 Daylog 标识，请先检查重复记录"
+	case "unknown_owner":
+		return "云端已有该日期记录，但本机缺少同步归属信息，已保留原文；请恢复原数据目录后重试"
 	case "block_limit":
 		return "Notion 免费工作区区块额度已用尽；请检查工作区套餐与成员数量"
 	case "missing_token":

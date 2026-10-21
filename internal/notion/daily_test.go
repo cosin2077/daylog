@@ -139,3 +139,70 @@ func TestRendererKeepsEvidenceBoundariesAndEscapesHeadingInjection(t *testing.T)
 		t.Fatal("estimation evidence boundary missing")
 	}
 }
+
+func TestNotionReadbackLinkificationKeepsOriginalText(t *testing.T) {
+	input := `\[MOCK\] 确认 \*\*字面星号\*\*、task\_id、C:\\demo 和 https://example.invalid/cache?first=1&next=two；不是完成证明。`
+	actual := `\[MOCK\] 确认 \*\*字面星号\*\*、task_id、C:\\demo 和 [https://example.invalid/cache?first=1&next=two；不是完成证明。](https://example.invalid/cache?first=1&next=two；不是完成证明。)`
+	if canonicalMarkdown(input) != canonicalMarkdown(actual) {
+		t.Fatal("Notion native URL normalization rejected identical human text")
+	}
+}
+
+func TestRebindingExistingPageWithoutLocalProofPreservesRemoteHistory(t *testing.T) {
+	s, f := setupFake(t)
+	day := sampleDay(2)
+	day.SourceBatches = []string{"expired-batch", "batch"}
+	day.Activities[0].Summary = "必须保留的较早事实"
+	if _, err := s.Deliver(context.Background(), day); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	for key := range f.pages {
+		id = key
+	}
+	before := f.markdown[id]
+	other := &Service{Root: t.TempDir(), Settings: s.Settings, Client: s.Client}
+	if err := other.Setup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	day.SourceBatches, day.Activities = []string{"batch"}, day.Activities[1:]
+	if _, err := other.Deliver(context.Background(), day); err == nil || !strings.Contains(err.Error(), "归属信息") || f.markdown[id] != before {
+		t.Fatal("new root silently shrank existing page", err)
+	}
+}
+
+func TestLostUpdateThenMissingSourceCannotShrinkCommittedBody(t *testing.T) {
+	s, f := setupFake(t)
+	day := sampleDay(1)
+	zone, _ := time.LoadLocation(day.Timezone)
+	date, _ := time.ParseInLocation("2006-01-02", day.Date, zone)
+	e := exports.Engine{Root: s.Settings.StateRoot(s.Root), Sink: s, Load: func(time.Time) (exports.Day, error) { return day, nil }}
+	if _, err := e.Sync(context.Background(), date, true); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	for key := range f.pages {
+		id = key
+	}
+	day.Activities = append(day.Activities, sampleDay(2).Activities[1])
+	day.Activities[1].Summary = "远端已提交但响应丢失的新事实"
+	day.SourceBatches = append(day.SourceBatches, "new-batch")
+	f.mu.Lock()
+	f.dropMarkdown = true
+	f.mu.Unlock()
+	if _, err := e.Sync(context.Background(), date, true); err == nil {
+		t.Fatal("response loss claimed complete")
+	}
+	f.mu.Lock()
+	before := f.markdown[id]
+	f.mu.Unlock()
+	day.Activities, day.SourceBatches = day.Activities[:1], []string{"batch"}
+	if _, err := e.Sync(context.Background(), date, true); err == nil || !strings.Contains(err.Error(), "不完整") {
+		t.Fatal("lost-response sources were not protected", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.markdown[id] != before || !strings.Contains(before, "远端已提交但响应丢失的新事实") {
+		t.Fatal("committed body shrank after response loss")
+	}
+}
