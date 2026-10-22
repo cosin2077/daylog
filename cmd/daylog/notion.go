@@ -23,6 +23,7 @@ import (
 const notionHelp = `daylog notion setup [--page Notion页面链接] [--database 已有Daylog库链接] [--token-stdin] [--timezone Asia/Shanghai] [--since YYYY-MM-DD]
 daylog notion status [--json]
 daylog notion check [--json]
+daylog notion schedule [--times 12:00,16:00,18:00,20:00,22:00] [--json]
 daylog notion sync [--date YYYY-MM-DD | --yes] [--dry-run] [--retry-uncertain] [--json]
 daylog notion disable [--json]
 
@@ -30,6 +31,7 @@ setup 隐藏输入 Token，在目标页下建立一个 Daylog 数据库，每天
 Token 只存系统凭据存储，不写入配置、输出或命令历史；脚本请用 --token-stdin 并指定 --page。
 手动 sync 默认今天，显示日期后需要确认；--date 显式指定日期可直接执行，--yes 明确接受默认今天。脚本须使用 --date 或 --yes。
 后台每天本地时间 00:00 同步前一天，开机/联网后补传；需保持 Daylog 后台运行，可用 daylog start --login。
+schedule 设置当天覆盖同步的时间点，按已保存时区执行；--times "" 恢复仅午夜同步。错过多个时间点，恢复后只补一次最新记录。
 时区在 setup 时保存，跨午夜、休眠或补传都使用记录所属日期作为标题。
 已整理活动、估时与来源、未知区间、待整理数量都会同步；不上传截图、不额外调用模型。
 --dry-run 只输出本地结构化内容，不联网。--retry-uncertain 仅在确认云端没有该条记录时使用。
@@ -48,13 +50,17 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 		return nil
 	}
 	op := args[0]
-	if op != "setup" && op != "status" && op != "check" && op != "sync" && op != "disable" {
-		return errors.New("Notion 子命令须为 setup、status、check、sync 或 disable")
+	if op != "setup" && op != "status" && op != "check" && op != "sync" && op != "disable" && op != "schedule" {
+		return errors.New("Notion 子命令须为 setup、status、check、sync、schedule 或 disable")
 	}
 	f := flags("notion " + op)
 	asJSON := f.Bool("json", false, "JSON output")
 	page, database, zone, since, date := "", "", "", "", ""
 	stdin, dryRun, retryUncertain, yes := false, false, false, false
+	times := ""
+	if op == "schedule" {
+		f.StringVar(&times, "times", "", "comma-separated local checkpoint times; empty disables daytime sync")
+	}
 	if op == "setup" {
 		f.StringVar(&page, "page", "", "Notion parent page URL")
 		f.StringVar(&database, "database", "", "existing daily-page database URL")
@@ -72,7 +78,9 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
-	if op == "setup" {
+	timesExplicit := false
+	f.Visit(func(value *flag.Flag) { timesExplicit = timesExplicit || value.Name == "times" })
+	if op == "setup" || op == "disable" || (op == "schedule" && timesExplicit) {
 		dir := filepath.Join(store.Root, "integrations")
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			return err
@@ -97,6 +105,29 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 		}
 	})
 	settings, readErr := notion.ReadSettings(store.Root)
+	if op == "schedule" {
+		if readErr != nil {
+			return errors.New("Notion 尚未配置或配置无效，请运行 daylog notion setup")
+		}
+		if settings.Layout != notion.DailyLayout {
+			return errors.New("Notion 仍为旧版双库配置，请先运行 daylog notion setup")
+		}
+		if timesExplicit {
+			var err error
+			settings.SyncTimes, err = notion.ParseSyncTimes(times)
+			if err != nil {
+				return err
+			}
+			if err = notion.SaveSettings(store.Root, settings); err != nil {
+				return err
+			}
+		}
+		message := "每天 00:00 同步前一天"
+		if len(settings.SyncTimes) > 0 {
+			message += "；当天覆盖同步：" + strings.Join(settings.SyncTimes, "、")
+		}
+		return result(*asJSON, map[string]any{"timezone": settings.Timezone, "sync_times": append([]string{}, settings.SyncTimes...), "enabled": settings.Enabled}, "Notion 同步计划（"+settings.Timezone+"）："+message+"。后台恢复时补传最新记录；自动同步启用："+enabled(settings.Enabled))
+	}
 	if op == "status" {
 		if errors.Is(readErr, os.ErrNotExist) {
 			return result(*asJSON, map[string]any{"configured": false, "enabled": false}, "Notion 尚未配置。运行 daylog notion setup 开始配置。")
@@ -109,6 +140,9 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 			return err
 		}
 		message := fmt.Sprintf("Notion 自动同步：%t · 时区 %s · 每天 00:00 同步前一天\n目标页面：https://www.notion.so/%s\n已记录 %d 个日期的同步状态；用 --json 查看每个日期的成功、失败与下次重试时间。", settings.Enabled && settings.Layout == notion.DailyLayout, settings.Timezone, settings.ParentPage, len(state.Days))
+		if len(settings.SyncTimes) > 0 {
+			message += "\n当天覆盖同步：" + strings.Join(settings.SyncTimes, "、")
+		}
 		if settings.Layout != notion.DailyLayout {
 			message += "\n当前为旧版双库配置，需重新运行 daylog notion setup；已有单页库可用 --database 指定。"
 		}
@@ -188,6 +222,7 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 		}
 		if readErr == nil && settings.ParentPage == proposed.ParentPage {
 			proposed.SourceID = settings.SourceID
+			proposed.SyncTimes = settings.SyncTimes
 			if settings.Layout == notion.DailyLayout {
 				proposed.DailyDatabase = settings.DailyDatabase
 				proposed.DailySource = settings.DailySource

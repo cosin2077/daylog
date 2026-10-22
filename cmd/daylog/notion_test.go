@@ -146,3 +146,34 @@ func TestNotionProgressKeepsJSONAndFailureOutputClean(t *testing.T) {
 		}
 	}
 }
+
+func TestNotionScheduleConfiguresTimesWithoutCredentialsOrEnablingSync(t *testing.T) {
+	s := configStore(t)
+	settings, _ := notion.NewSettings("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Asia/Shanghai", "2026-10-19")
+	if err := notion.SaveSettings(s.Root, settings); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := commandOutput(t, "--data", s.Root, "notion", "schedule", "--times", "22:00,12:00,16:00,18:00,20:00", "--json")
+	var response struct {
+		SyncTimes []string `json:"sync_times"`
+		Enabled   bool
+	}
+	if err != nil || json.Unmarshal(raw, &response) != nil || len(response.SyncTimes) != 5 || response.SyncTimes[0] != "12:00" || response.Enabled {
+		t.Fatal(string(raw), err)
+	}
+	before, _ := notion.ReadSettings(s.Root)
+	if _, err := commandOutput(t, "--data", s.Root, "notion", "schedule", "--times", "25:00"); err == nil {
+		t.Fatal("bad time accepted")
+	}
+	after, _ := notion.ReadSettings(s.Root)
+	if strings.Join(before.SyncTimes, ",") != strings.Join(after.SyncTimes, ",") {
+		t.Fatal("invalid input changed saved schedule")
+	}
+	if _, err := commandOutput(t, "--data", s.Root, "notion", "schedule", "--times", ""); err != nil {
+		t.Fatal(err)
+	}
+	after, _ = notion.ReadSettings(s.Root)
+	if len(after.SyncTimes) != 0 {
+		t.Fatal("daytime schedule was not cleared")
+	}
+}

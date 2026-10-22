@@ -264,4 +264,4 @@ daylog analyze --batch 批次ID --retry
 
 ## Notion 每日同步
 
-运行 `daylog notion setup`，在终端隐藏输入 API Token 和目标页面链接。Daylog 使用一个数据库，每天一页，只有名称、日期和状态三个字段；详细活动按时间写在正文。手动 `daylog notion sync` 默认今天并确认日期，`--date YYYY-MM-DD` 可直接同步指定日期；同一天后续补齐更新原页面并保留「我的备注」。后台每天 00:00 同步前一天，恢复运行或联网后补传，不上传截图。已有兼容库可用 `setup --database <库链接>` 接入；首次配置后保持后台运行，`notion sync --dry-run` 可先检查内容。[配置、数据字段与恢复说明](docs/notion-sync.md)。
+运行 `daylog notion setup`，在终端隐藏输入 API Token 和目标页面链接。Daylog 使用一个数据库，每天一页，只有名称、日期和状态三个字段；详细活动按时间写在正文。手动 `daylog notion sync` 默认今天并确认日期，`--date YYYY-MM-DD` 可直接同步指定日期；同一天后续补齐更新原页面并保留「我的备注」。后台每天 00:00 同步前一天；可用 `daylog notion schedule --times 12:00,16:00,18:00,20:00,22:00` 增加白天备份。恢复运行或联网后补传最新记录，不上传截图。已有兼容库可用 `setup --database <库链接>` 接入；首次配置后保持后台运行，`notion sync --dry-run` 可先检查内容。[配置、数据字段与恢复说明](docs/notion-sync.md)。

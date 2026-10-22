@@ -11,7 +11,7 @@ import tempfile
 import zipfile
 
 root=Path(__file__).resolve().parents[1]
-version=os.environ.get('DAYLOG_VERSION','0.11.1')
+version=os.environ.get('DAYLOG_VERSION','0.12.0')
 if not re.fullmatch(r'\d+\.\d+\.\d+',version):raise SystemExit('Invalid numeric version')
 development=os.environ.get('DAYLOG_DEVELOPMENT_BUILD')=='1'
 key=os.environ.get('DAYLOG_RELEASE_KEY','')

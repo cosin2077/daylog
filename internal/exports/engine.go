@@ -30,15 +30,16 @@ type Failure interface {
 }
 
 type Job struct {
-	SourceBatches []string  `json:"source_batches,omitempty"`
-	Hash          string    `json:"hash,omitempty"`
-	URL           string    `json:"url,omitempty"`
-	Attempts      int       `json:"attempts"`
-	NextAttempt   time.Time `json:"next_attempt,omitempty"`
-	LastError     string    `json:"last_error,omitempty"`
-	BlockReason   string    `json:"block_reason,omitempty"`
-	Blocked       bool      `json:"blocked,omitempty"`
-	LastSuccess   time.Time `json:"last_success,omitempty"`
+	LastCheckpoint string    `json:"last_checkpoint,omitempty"`
+	SourceBatches  []string  `json:"source_batches,omitempty"`
+	Hash           string    `json:"hash,omitempty"`
+	URL            string    `json:"url,omitempty"`
+	Attempts       int       `json:"attempts"`
+	NextAttempt    time.Time `json:"next_attempt,omitempty"`
+	LastError      string    `json:"last_error,omitempty"`
+	BlockReason    string    `json:"block_reason,omitempty"`
+	Blocked        bool      `json:"blocked,omitempty"`
+	LastSuccess    time.Time `json:"last_success,omitempty"`
 }
 type State struct {
 	ArchivedDays  int            `json:"archived_days"`
@@ -96,7 +97,16 @@ func (e Engine) locked(call func() error) error {
 
 // A persisted date is the source date, never reinterpreted as "yesterday" on
 // retry. Calendar arithmetic also preserves 23/25-hour days at DST changes.
-func (e Engine) RunDue(ctx context.Context, start, now time.Time, retention int) error {
+func (e Engine) RunDue(ctx context.Context, start, now time.Time, retention int, checkpoints ...int) error {
+	latest := -1
+	for _, minute := range checkpoints {
+		if minute < 0 || minute >= 24*60 {
+			return errors.New("同步时间须在 00:00 到 23:59 之间")
+		}
+		if minute <= now.Hour()*60+now.Minute() && minute > latest {
+			latest = minute
+		}
+	}
 	return e.locked(func() error {
 		state, err := ReadState(e.Root)
 		if err != nil {
@@ -117,7 +127,9 @@ func (e Engine) RunDue(ctx context.Context, start, now time.Time, retention int)
 				return errors.New("本地同步日期状态无效")
 			}
 			if date.Before(cutoff) {
-				if job.LastSuccess.IsZero() || job.LastError != "" {
+				if job.LastSuccess.IsZero() && job.LastError == "" && job.Hash == "" {
+					// An empty date checked at a daytime checkpoint had no upload.
+				} else if job.LastSuccess.IsZero() || job.LastError != "" {
 					state.ExpiredUnsent++
 				} else {
 					state.ArchivedDays++
@@ -145,6 +157,15 @@ func (e Engine) RunDue(ctx context.Context, start, now time.Time, retention int)
 		}
 		sort.Slice(dates, func(i, j int) bool { return dates[i].Before(dates[j]) })
 		count := 0
+		checkpoint := ""
+		if latest >= 0 && !today.Before(start) {
+			checkpoint = fmt.Sprintf("%02d:%02d", latest/60, latest%60)
+			job := state.Days[today.Format("2006-01-02")]
+			if job.LastCheckpoint < checkpoint || job.LastError != "" {
+				// Prioritize today's backup over a historical catch-up backlog.
+				dates = append([]time.Time{today}, dates...)
+			}
+		}
 		for _, day := range dates {
 			if err = ctx.Err(); err != nil {
 				return err
@@ -169,11 +190,24 @@ func (e Engine) RunDue(ctx context.Context, start, now time.Time, retention int)
 				}
 				continue
 			}
-			snapshot.Ongoing = false // RunDue only exports ended calendar days.
-			if !snapshot.HasData() || job.Hash == snapshot.Hash() {
+			snapshot.Ongoing = day.Equal(today)
+			unchanged := job.Hash == snapshot.Hash() && job.LastError == ""
+			if !snapshot.HasData() || unchanged {
+				if snapshot.Ongoing && job.LastError == "" {
+					job.LastCheckpoint = checkpoint
+					state.Days[key] = job
+					if err = journal.WriteJSON(filepath.Join(e.Root, "sync-state.json"), state); err != nil {
+						return err
+					}
+				}
 				continue
 			}
 			e.deliver(ctx, &state, snapshot, now, false)
+			if snapshot.Ongoing && state.Days[key].LastError == "" {
+				job = state.Days[key]
+				job.LastCheckpoint = checkpoint
+				state.Days[key] = job
+			}
 			count++
 			if err = journal.WriteJSON(filepath.Join(e.Root, "sync-state.json"), state); err != nil {
 				return err
@@ -245,7 +279,7 @@ func (e Engine) deliver(ctx context.Context, state *State, day Day, now time.Tim
 		}
 	}
 
-	if !force && job.Hash == day.Hash() {
+	if !force && job.Hash == day.Hash() && job.LastError == "" {
 		return
 	}
 	// Persist the attempted coverage before sending. A remote commit may

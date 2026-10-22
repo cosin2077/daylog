@@ -38,13 +38,17 @@ func Run(ctx context.Context, root string, secrets SecretStore) {
 				since, dateErr = time.ParseInLocation("2006-01-02", settings.Since, zone)
 			}
 			if zoneErr == nil && dateErr == nil {
+				checkpoints, checkpointErr := settings.Checkpoints()
+				if checkpointErr != nil {
+					return // ReadSettings already rejects invalid configuration.
+				}
 				token := secrets.Get(settings.SecretName())
 				client := NewClient(token)
 				service := Service{Root: root, Settings: settings, Client: client}
 				config, configErr := journal.ReadConfig(root)
 				if configErr == nil {
 					jobCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-					_ = service.Engine().RunDue(jobCtx, since, time.Now().In(zone), config.ReportRetentionDays)
+					_ = service.Engine().RunDue(jobCtx, since, time.Now().In(zone), config.ReportRetentionDays, checkpoints...)
 					cancel()
 				}
 			}

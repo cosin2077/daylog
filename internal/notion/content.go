@@ -17,7 +17,7 @@ const recordHeading = "## Daylog 活动记录"
 const notesHeading = "## 我的备注"
 
 var markdownEscapes = strings.NewReplacer("\\", "\\\\", "`", "\\`", "*", "\\*", "_", "\\_", "[", "\\[", "]", "\\]", "<", "&lt;", ">", "&gt;", "#", "\\#")
-var markdownAutoLinks = regexp.MustCompile(`\[(https?://[^\]\n]+)\]\((https?://[^)\n]+)\)`)
+var markdownAutoLinks = regexp.MustCompile(`\[((?:\\.|[^\[\]\\\n])*)\]\((https?://[^)\n]+)\)`)
 
 func readableText(value string) string {
 	return markdownEscapes.Replace(strings.Join(strings.Fields(value), " "))
@@ -104,11 +104,12 @@ func renderDay(day exports.Day) string {
 }
 
 func canonicalMarkdown(value string) string {
-	// Notion linkifies bare URLs on readback. Keep the literal text when the
-	// generated link label and target are identical; no information is lost.
+	// Notion also linkifies bare domains and filenames such as cache.rs or
+	// setup.sh. Accept only a target equal to the original text, optionally
+	// prefixed with the HTTP(S) scheme supplied by Notion.
 	value = markdownAutoLinks.ReplaceAllStringFunc(value, func(link string) string {
 		parts := markdownAutoLinks.FindStringSubmatch(link)
-		if parts[1] == parts[2] {
+		if parts[1] == parts[2] || "http://"+parts[1] == parts[2] || "https://"+parts[1] == parts[2] {
 			return parts[1]
 		}
 		return link
