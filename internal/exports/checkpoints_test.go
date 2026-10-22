@@ -155,3 +155,44 @@ func TestRetryOfUnchangedFailedManualUpdateDoesNotStayStuck(t *testing.T) {
 		t.Fatal("unchanged hash hid failed refresh", calls, state.Days)
 	}
 }
+
+func TestFallBackRetryDoesNotRepeatCompletedCheckpoint(t *testing.T) {
+	zone, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := time.Date(2026, 11, 1, 0, 0, 0, 0, zone)
+	calls, version := 0, int64(0)
+	e := Engine{Root: t.TempDir(), Load: func(d time.Time) (Day, error) {
+		return Day{Date: d.Format("2006-01-02"), AnalyzedBatches: 1, EstimatedSeconds: version}, nil
+	}, Sink: sinkFunc(func(context.Context, Day) (string, error) {
+		calls++
+		if calls == 2 {
+			return "", errors.New("offline")
+		}
+		return "url", nil
+	})}
+	// UTC disambiguates the two occurrences of 01:00–01:59 at fall-back.
+	for i, clock := range []string{"05:15", "05:30", "06:10", "06:15"} {
+		version++
+		now, err := time.Parse(time.RFC3339, "2026-11-01T"+clock+":00Z")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = e.RunDue(context.Background(), day, now.In(zone), 90, 60, 75, 90); err != nil {
+			t.Fatal(err)
+		}
+		if i == 2 {
+			state, err := ReadState(e.Root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job := state.Days["2026-11-01"]; job.LastError != "" || job.LastCheckpoint != "01:15" {
+				t.Fatalf("recovery moved completed checkpoint backwards: %+v", job)
+			}
+		}
+	}
+	if calls != 3 {
+		t.Fatalf("repeated an already completed civil checkpoint: got %d calls, want 3", calls)
+	}
+}

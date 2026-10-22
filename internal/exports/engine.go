@@ -193,7 +193,7 @@ func (e Engine) RunDue(ctx context.Context, start, now time.Time, retention int,
 			snapshot.Ongoing = day.Equal(today)
 			unchanged := job.Hash == snapshot.Hash() && job.LastError == ""
 			if !snapshot.HasData() || unchanged {
-				if snapshot.Ongoing && job.LastError == "" {
+				if snapshot.Ongoing && job.LastError == "" && job.LastCheckpoint < checkpoint {
 					job.LastCheckpoint = checkpoint
 					state.Days[key] = job
 					if err = journal.WriteJSON(filepath.Join(e.Root, "sync-state.json"), state); err != nil {
@@ -203,7 +203,7 @@ func (e Engine) RunDue(ctx context.Context, start, now time.Time, retention int,
 				continue
 			}
 			e.deliver(ctx, &state, snapshot, now, false)
-			if snapshot.Ongoing && state.Days[key].LastError == "" {
+			if snapshot.Ongoing && state.Days[key].LastError == "" && state.Days[key].LastCheckpoint < checkpoint {
 				job = state.Days[key]
 				job.LastCheckpoint = checkpoint
 				state.Days[key] = job
