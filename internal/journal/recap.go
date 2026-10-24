@@ -81,6 +81,9 @@ func buildReview(p PeriodReport) ReviewSummary {
 	if len(p.Activities) == 0 && p.WorkTime.EstimatedSeconds > 0 {
 		return ReviewSummary{Headline: scope + "已有电脑工作估时，具体活动尚未归类。", Advice: "先查看未归类时间；电脑活动估时不等于已经确认了任务内容。"}
 	}
+	if len(p.Activities) == 0 && p.WorkTime.Available && p.WorkTime.AwaySeconds > 0 && p.WorkTime.MissingSeconds == 0 {
+		return ReviewSummary{Headline: scope + "现有计时记录均为未工作。", Advice: "锁屏、息屏和达到无输入阈值后的记录不计工作；恢复输入后继续记录。"}
+	}
 	if len(p.Activities) == 0 && p.AnalyzedBatches > 0 {
 		return ReviewSummary{Headline: fmt.Sprintf("%s已整理 %d 段记录，尚未识别出可描述的活动。", scope, p.AnalyzedBatches), Advice: "可展开未估时区间查看记录范围；检查截图是否清晰、模型是否支持读图。没有识别到活动不代表没有记录。"}
 	}

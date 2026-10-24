@@ -28,6 +28,7 @@ type workPoint struct {
 	state string
 	gap   int
 	cut   bool
+	raw   bool
 }
 
 type workLedger struct {
@@ -39,7 +40,11 @@ type workLedger struct {
 	windows []span
 }
 
-func workingState(state string) bool { return state == "sampled" || state == "active" }
+func workingState(state string) bool {
+	// Old task estimation used "uncertain" for an available screenshot whose
+	// task label could not be recovered. It is not a capture failure.
+	return state == "sampled" || state == "active" || state == "uncertain"
+}
 func awayState(state string) bool {
 	return state == "idle" || state == "screen_locked" || state == "screen_asleep"
 }
@@ -50,26 +55,32 @@ func newWorkLedger(reports []Report, pending []Batch, draft Batch, observations 
 		if r.SchemaVersion == 2 && r.End.After(r.Start) {
 			l.windows = append(l.windows, span{r.Start, r.End})
 		}
+		var stream []workPoint
 		for _, p := range r.TaskObservations {
-			l.points = append(l.points, workPoint{p.At, p.State, p.MaxGapSeconds, p.State == "missing"})
+			stream = append(stream, workPoint{p.At, p.State, p.MaxGapSeconds, p.State == "missing", false})
 		}
+		l.addStream(stream)
 	}
 	for _, b := range append(append([]Batch(nil), pending...), draft) {
 		if b.SchemaVersion == 2 && b.End.After(b.Start) {
 			l.windows = append(l.windows, span{b.Start, b.End})
 		}
+		var stream []workPoint
 		for _, p := range b.Observations {
 			gap := p.MaxGapSeconds
 			if gap == 0 {
 				gap = b.MaxGapSeconds
 			}
-			l.points = append(l.points, workPoint{p.At, p.State, gap, p.State == "missing"})
+			stream = append(stream, workPoint{p.At, p.State, gap, p.State == "missing", false})
 		}
+		l.addStream(stream)
 	}
 	// Raw events come last, preserving their observed state at a shared instant.
+	var raw []workPoint
 	for _, p := range observations {
-		l.points = append(l.points, workPoint{p.At, p.State, p.MaxGapSeconds, p.State == "missing"})
+		raw = append(raw, workPoint{p.At, p.State, p.MaxGapSeconds, p.State == "missing", true})
 	}
+	l.addStream(raw)
 	sort.SliceStable(l.points, func(i, j int) bool { return l.points[i].at.Before(l.points[j].at) })
 	points := l.points[:0]
 	for _, p := range l.points {
@@ -82,7 +93,15 @@ func newWorkLedger(reports []Report, pending []Batch, draft Batch, observations 
 		if len(points) > 0 && points[len(points)-1].at.Equal(p.at) {
 			previous := points[len(points)-1]
 			p.gap = min(p.gap, previous.gap)
-			p.cut = p.cut || previous.cut
+			switch {
+			case p.raw:
+				// The actual ordered log wins over a projected report boundary.
+			case previous.raw:
+				p.state, p.cut, p.raw = previous.state, previous.cut, true
+			default:
+				p.state = conservativeWorkState(previous.state, p.state)
+				p.cut = p.cut || previous.cut
+			}
 			points[len(points)-1] = p
 		} else {
 			points = append(points, p)
@@ -113,6 +132,51 @@ func newWorkLedger(reports []Report, pending []Batch, draft Batch, observations 
 	return l
 }
 
+// Collapse each ordered source before combining reports. A transient missing
+// then active event can share an instant; unrelated overlapping reports have
+// no such ordering and must preserve the more restrictive availability fact.
+func (l *workLedger) addStream(stream []workPoint) {
+	points := make(map[time.Time]workPoint)
+	for _, p := range stream {
+		p.at = p.at.UTC()
+		if old, ok := points[p.at]; ok {
+			p.cut = p.cut || old.cut
+			if old.gap > 0 && (p.gap == 0 || old.gap < p.gap) {
+				p.gap = old.gap
+			}
+		}
+		points[p.at] = p
+	}
+	for _, p := range points {
+		l.points = append(l.points, p)
+	}
+}
+
+func conservativeWorkState(a, b string) string {
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	if workingState(a) != workingState(b) {
+		if workingState(a) {
+			return b
+		}
+		return a
+	}
+	if awayState(a) != awayState(b) {
+		if awayState(a) {
+			return a
+		}
+		return b
+	}
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func clippedWorkSpans(parts []span, start, end time.Time) []span {
 	var out []span
 	for _, p := range parts {
@@ -134,6 +198,13 @@ func (l *workLedger) summary(start, end time.Time, classified []span) WorkTime {
 	for _, p := range append(append([]span(nil), away...), clippedWorkSpans(l.blocked, start, end)...) {
 		excluded = append(excluded, TimeSpan{Start: p.start, End: p.end})
 	}
+	var available []span
+	for _, p := range work {
+		for _, allowed := range subtractSpans(p.start, p.end, excluded) {
+			available = append(available, span{allowed.Start, allowed.End})
+		}
+	}
+	work = available
 	for _, p := range classified {
 		for _, allowed := range subtractSpans(p.start, p.end, excluded) {
 			work = append(work, span{allowed.Start, allowed.End})
@@ -175,14 +246,28 @@ func (l *workLedger) summary(start, end time.Time, classified []span) WorkTime {
 // ReportWorkTime uses only committed sources, suitable for durable exports.
 func ReportWorkTime(reports []Report, start, end time.Time) WorkTime {
 	var classified []span
+	ledger := &workLedger{}
 	for _, r := range reports {
+		if r.SchemaVersion != 2 || !r.End.After(r.Start) {
+			continue
+		}
+		part := newWorkLedger([]Report{r}, nil, Batch{}, nil)
+		// A durable export owns this committed window, not the interval to
+		// another batch. Availability events outside it may be uncommitted.
+		ledger.work = append(ledger.work, clippedWorkSpans(part.work, r.Start, r.End)...)
+		ledger.away = append(ledger.away, clippedWorkSpans(part.away, r.Start, r.End)...)
+		ledger.gaps = append(ledger.gaps, clippedWorkSpans(part.gaps, r.Start, r.End)...)
+		ledger.blocked = append(ledger.blocked, clippedWorkSpans(part.blocked, r.Start, r.End)...)
+		ledger.windows = append(ledger.windows, span{r.Start, r.End})
 		for _, c := range r.Cards {
 			for _, p := range c.Spans {
-				classified = append(classified, span{p.Start, p.End})
+				if value, ok := clipSpan(p, r.Start, r.End); ok {
+					classified = append(classified, value)
+				}
 			}
 		}
 	}
-	return newWorkLedger(reports, nil, Batch{}, nil).summary(start, end, classified)
+	return ledger.summary(start, end, classified)
 }
 
 func mergedWorkSpans(parts []span) []span {

@@ -35,6 +35,7 @@ type Runner struct {
 	lastFrame       string
 	observedState   string
 	observedApp     string
+	observedAt      time.Time
 	observationGap  int
 	lastTick        time.Time
 	lastCleanup     time.Time
@@ -258,7 +259,16 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		return p.Delay
 	}
 	if r.Config.IdleSeconds > 0 && env.IdleSeconds >= float64(r.Config.IdleSeconds) {
-		r.noteState(now, "idle", "")
+		idleAt := now.Add(-time.Duration((env.IdleSeconds - float64(r.Config.IdleSeconds)) * float64(time.Second)))
+		// Polling may be sparse on battery. End work at the known threshold,
+		// but never backdate across the last confirmed active poll or startup.
+		if r.lastTick.IsZero() || idleAt.Before(r.lastTick) {
+			idleAt = now
+		}
+		if idleAt.Before(r.observedAt) {
+			idleAt = r.observedAt
+		}
+		r.noteState(idleAt, "idle", "")
 		r.mu.Lock()
 		r.status.SkippedIdle++
 		r.mu.Unlock()

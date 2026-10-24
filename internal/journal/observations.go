@@ -58,4 +58,5 @@ func (r *Runner) noteState(now time.Time, state, app string) {
 	}
 	r.observedState = state
 	r.observedApp = app
+	r.observedAt = now
 }

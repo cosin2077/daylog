@@ -164,6 +164,92 @@ func TestWorkTimeRetainsSupportedOlderSpansButHonorsExplicitAbsence(t *testing.T
 	}
 }
 
+func TestLegacyUncertainTaskLabelsRetainComputerActivity(t *testing.T) {
+	at := time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
+	r := workFixture(at)
+	r.EstimationVersion = "bounded_neighbors_v3"
+	r.Cards[0].Confidence = "low"
+	r.Cards[0].Spans = nil
+	r = estimateReport(r)
+	if r.TaskObservations[0].State != "uncertain" {
+		t.Fatal("fixture did not follow historical label recovery")
+	}
+	w := ReportWorkTime([]Report{r}, at, at.Add(time.Hour))
+	if w.EstimatedSeconds != 600 || w.UnclassifiedSeconds != 600 || w.ClassifiedSeconds != 0 || w.MissingSeconds != 0 {
+		t.Fatal("task uncertainty became capture unavailability", w)
+	}
+}
+
+func TestDurableWorkDoesNotBridgeCommittedWindows(t *testing.T) {
+	at := time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
+	var reports []Report
+	for _, offset := range []time.Duration{0, 3 * time.Minute} {
+		a := at.Add(offset)
+		reports = append(reports, Report{SchemaVersion: 2, Start: a, End: a.Add(time.Minute), TaskObservations: []TaskObservation{{At: a, State: "sampled", MaxGapSeconds: 300}, {At: a.Add(time.Minute), State: "sampled", MaxGapSeconds: 300}}})
+	}
+	w := ReportWorkTime(reports, at, at.Add(time.Hour))
+	if w.EstimatedSeconds != 120 || w.UnclassifiedSeconds != 120 {
+		t.Fatal("durable export inferred activity outside its committed sources", w)
+	}
+}
+
+func TestConflictingReportsPreserveAbsenceRegardlessOfOrder(t *testing.T) {
+	at := time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
+	a := Report{SchemaVersion: 2, Start: at, End: at.Add(120 * time.Second)}
+	for i := 0; i <= 4; i++ {
+		a.TaskObservations = append(a.TaskObservations, TaskObservation{At: at.Add(time.Duration(i) * 30 * time.Second), State: "sampled", MaxGapSeconds: 60})
+	}
+	b := Report{SchemaVersion: 2, Start: at.Add(30 * time.Second), End: at.Add(60 * time.Second), TaskObservations: []TaskObservation{{At: at.Add(30 * time.Second), State: "screen_locked", MaxGapSeconds: 60}, {At: at.Add(60 * time.Second), State: "sampled", MaxGapSeconds: 60}}}
+	for _, rs := range [][]Report{{a, b}, {b, a}} {
+		for _, w := range []WorkTime{ReportWorkTime(rs, at, at.Add(time.Hour)), BuildOverview(at, rs, nil, Batch{}).Views[0].WorkTime} {
+			if w.EstimatedSeconds != 90 || w.AwaySeconds != 30 || w.UnclassifiedSeconds != 90 {
+				t.Fatal("report order swallowed explicit absence", w)
+			}
+		}
+	}
+}
+
+func TestIdleDeadlineHonorsBatteryPollingOffset(t *testing.T) {
+	s := testStore(t)
+	c := DefaultConfig()
+	source := &testSource{data: imageData(t), env: native.Environment{App: "fixture", Permission: true, OnBattery: true, BatteryPercent: 80}}
+	r := Runner{Store: s, Config: c, Source: source}
+	at := time.Now().UTC().Truncate(time.Hour)
+	for second := 0; second <= 1200; second += 120 {
+		source.env.IdleSeconds = float64(second + 119)
+		r.step(context.Background(), at.Add(time.Duration(second)*time.Second))
+	}
+	obs, err := s.ReadObservations(at, at.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := newWorkLedger(nil, nil, Batch{}, obs).summary(at, at.Add(time.Hour), nil)
+	if w.EstimatedSeconds != 1081 {
+		t.Fatal("battery polling extended the twenty-minute grace", w)
+	}
+	last := obs[len(obs)-1]
+	if last.State != "idle" || !last.At.Equal(at.Add(1081*time.Second)) {
+		t.Fatal("idle boundary is the polling time instead of the input deadline")
+	}
+}
+
+func TestIdleDeadlineDoesNotReorderRecordedPauseBoundary(t *testing.T) {
+	s := testStore(t)
+	c := DefaultConfig()
+	source := &testSource{data: imageData(t), env: native.Environment{App: "fixture", Permission: true, IdleSeconds: 3600}}
+	at := time.Now().UTC().Truncate(time.Hour)
+	r := Runner{Store: s, Config: c, Source: source, lastTick: at}
+	r.noteState(at.Add(30*time.Minute), "paused", "")
+	r.step(context.Background(), at.Add(time.Hour))
+	obs, err := s.ReadObservations(at, at.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(obs) != 2 || obs[1].At.Before(obs[0].At) {
+		t.Fatal("idle deadline rewrote the order of an existing pause")
+	}
+}
+
 func TestTimingReaderIgnoresOnlyIncompleteTail(t *testing.T) {
 	s := testStore(t)
 	at := time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
