@@ -99,7 +99,7 @@ func buildReview(p PeriodReport) ReviewSummary {
 			if len([]rune(title)) > 48 {
 				title = truncate(title, 48) + "…"
 			}
-			r.Headline = scope + "，最多时间在「" + title + "」。"
+			r.Headline = scope + "已归类的活动中，最多时间在「" + title + "」。"
 			break
 		}
 	}
@@ -116,7 +116,7 @@ func buildReview(p PeriodReport) ReviewSummary {
 			r.Headline = fmt.Sprintf("%s记录了 %d 项活动，暂不足以概括主线。", scope, len(p.Activities))
 		}
 	}
-	if (p.UnknownSeconds > p.EstimatedSeconds || p.WorkTime.UnclassifiedSeconds > p.WorkTime.ClassifiedSeconds) && p.EstimatedSeconds > 0 {
+	if !hasTimedTask && (p.UnknownSeconds > p.EstimatedSeconds || p.WorkTime.UnclassifiedSeconds > p.WorkTime.ClassifiedSeconds) && p.EstimatedSeconds > 0 {
 		r.Headline = "仅看已归类部分，" + r.Headline
 	}
 	if !hasTimedTask || p.EstimatedSeconds == 0 {

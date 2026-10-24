@@ -58,7 +58,7 @@ func renderDay(day exports.Day) string {
 	if day.WorkTime.Available {
 		fmt.Fprintf(&b, "\n\n电脑工作估时：%s；已归类 %s，未归类 %s。未归类时间已计入工作估时，不代表已确认具体任务；这里只统计已整理来源。按采集时的无输入阈值处理离开，锁屏、息屏及休眠不计工作，采集异常不推断为离开。", readableSeconds(day.WorkTime.EstimatedSeconds), readableSeconds(day.WorkTime.ClassifiedSeconds), readableSeconds(day.WorkTime.UnclassifiedSeconds))
 	}
-	fmt.Fprintf(&b, "\n\n估计投入：%s；其中插值 %s、邻接推断 %s，均已包含在总估时中，不应再次相加。未估时 %s；旧版范围覆盖 %s 单列。空白不等于休息，估时不等于确认工时。", readableSeconds(day.EstimatedSeconds), readableSeconds(day.InterpolatedSeconds), readableSeconds(day.InferredSeconds), readableSeconds(day.UnknownSeconds), readableSeconds(day.LegacyCoverageSeconds))
+	fmt.Fprintf(&b, "\n\n已归类活动估时：%s；其中插值 %s、邻接推断 %s，均已包含在已归类估时中，不应再次相加。任务估时缺口 %s；旧版范围覆盖 %s 单列。采集空白不等于休息，估时不等于确认工时。", readableSeconds(day.EstimatedSeconds), readableSeconds(day.InterpolatedSeconds), readableSeconds(day.InferredSeconds), readableSeconds(day.UnknownSeconds), readableSeconds(day.LegacyCoverageSeconds))
 	for _, a := range day.Activities {
 		when := timeLabel(a.Start)
 		if a.End.After(a.Start) {
