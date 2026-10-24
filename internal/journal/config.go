@@ -76,7 +76,7 @@ type AIConfig struct {
 const DefaultUpdateSource = "https://github.com/cosin2077/daylog/releases/latest/download/release.json"
 
 func DefaultConfig() Config {
-	return Config{IntervalSeconds: 30, Height: 720, Quality: 60, IdleSeconds: 300,
+	return Config{IntervalSeconds: 30, Height: 720, Quality: 60, IdleSeconds: 1200,
 		MinSaveSeconds: 90, HeartbeatSeconds: 300, ChangeThreshold: 0.005,
 		BatchSeconds: 900, TargetImages: 4, MaxImages: 8, MaxGapSeconds: 300, MaxImagesPerDay: 1536, RawRetentionDays: 3, ReportRetentionDays: 90, MaxStorageBytes: 256 << 20,
 		MaxPendingBatches: 96, BlockedApps: []string{},

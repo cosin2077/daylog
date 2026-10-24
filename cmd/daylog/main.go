@@ -21,7 +21,7 @@ import (
 	"daylog/internal/update"
 )
 
-var version = "0.12.0"
+var version = "0.13.0"
 
 const help = `Daylog — 自动记录今天做了什么
 
@@ -30,6 +30,7 @@ const help = `Daylog — 自动记录今天做了什么
   daylog report   打开日／周／月可视化报告
   daylog status   查看运行状态和待整理记录
   daylog stop     停止记录
+  daylog restart  重启后台，保留暂停和登录自启设置
   daylog config   查看或配置模型（可选，使用 config -h 查看方法）
   daylog notion   配置每日 Notion 同步（可选）
   daylog update   更新版本
@@ -48,6 +49,7 @@ daylog [--data 私有目录] <命令>
 日常
   start [--login]             开始记录；--login 启用登录启动
   stop                       停止记录
+  restart                    重启已运行后台，保留暂停和登录自启设置
   pause [--minutes N]         暂停 1–1440 分钟，到时自动恢复
   resume                     恢复记录
   today [yesterday]           查看今天或昨天；--full 查看全部
@@ -236,6 +238,12 @@ func executeCommand(args []string) error {
 			return errors.New("用法：daylog start")
 		}
 		return startRecording(ctx, s, *login, *asJSON)
+	case "restart":
+		asJSON, err := jsonOption("restart", args[1:])
+		if err != nil {
+			return err
+		}
+		return restartRecording(ctx, s, asJSON)
 	case "stop":
 		f := flags("stop")
 		asJSON := f.Bool("json", false, "JSON output")
@@ -386,6 +394,7 @@ func executeCommand(args []string) error {
 		wasRunning := false
 		restarted := false
 		wasService := false
+		var previousRuntime journal.Status
 		err = withProgress(!*asJSON, "正在下载、校验并安装更新", func() error {
 			var installErr error
 			check, installErr = update.Install(ctx, *source, app, version, *force, func() error {
@@ -405,6 +414,7 @@ func executeCommand(args []string) error {
 					return err
 				}
 				wasRunning = true
+				previousRuntime = previous
 				// Unload the LaunchAgent and wait for the daemon lock. A socket
 				// disappearing does not prove launchd has reaped the exiting process;
 				// kickstart during that gap can succeed without launching a replacement.
@@ -415,7 +425,7 @@ func executeCommand(args []string) error {
 					if err = service.Start(home, s.Root); err != nil {
 						return errors.New("应用已更新，但后台重启失败；原暂停状态已保留")
 					}
-					if _, err = waitRuntimeReady(ctx, func() (journal.Status, error) { return journal.SendControl(s.Root, journal.Control{Op: "status"}) }, true); err != nil {
+					if _, err = waitRestartReady(ctx, func() (journal.Status, error) { return journal.SendControl(s.Root, journal.Control{Op: "status"}) }, previousRuntime); err != nil {
 						return errors.New("应用已更新，但后台未就绪；原暂停状态已保留，请运行 daylog doctor 检查")
 					}
 					restarted = true

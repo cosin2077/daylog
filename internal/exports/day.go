@@ -37,21 +37,22 @@ type Activity struct {
 }
 
 type Day struct {
-	Ongoing               bool       `json:"ongoing"`
-	DraftFrames           int        `json:"draft_frames"`
-	LegacyCoverageSeconds int64      `json:"legacy_coverage_seconds"`
-	SourceBatches         []string   `json:"source_batches"`
-	SchemaVersion         int        `json:"schema_version"`
-	Date                  string     `json:"date"`
-	Timezone              string     `json:"timezone"`
-	EstimatedSeconds      int64      `json:"estimated_seconds"`
-	InferredSeconds       int64      `json:"inferred_seconds"`
-	InterpolatedSeconds   int64      `json:"interpolated_seconds"`
-	UnknownSeconds        int64      `json:"unknown_seconds"`
-	AnalyzedBatches       int        `json:"analyzed_batches"`
-	PendingBatches        int        `json:"pending_batches"`
-	FailedBatches         int        `json:"failed_batches"`
-	Activities            []Activity `json:"activities"`
+	WorkTime              journal.WorkTime `json:"work_time"`
+	Ongoing               bool             `json:"ongoing"`
+	DraftFrames           int              `json:"draft_frames"`
+	LegacyCoverageSeconds int64            `json:"legacy_coverage_seconds"`
+	SourceBatches         []string         `json:"source_batches"`
+	SchemaVersion         int              `json:"schema_version"`
+	Date                  string           `json:"date"`
+	Timezone              string           `json:"timezone"`
+	EstimatedSeconds      int64            `json:"estimated_seconds"`
+	InferredSeconds       int64            `json:"inferred_seconds"`
+	InterpolatedSeconds   int64            `json:"interpolated_seconds"`
+	UnknownSeconds        int64            `json:"unknown_seconds"`
+	AnalyzedBatches       int              `json:"analyzed_batches"`
+	PendingBatches        int              `json:"pending_batches"`
+	FailedBatches         int              `json:"failed_batches"`
+	Activities            []Activity       `json:"activities"`
 }
 
 func (d Day) HasData() bool {
@@ -73,6 +74,9 @@ func LoadDay(s *journal.Store, day time.Time) (Day, error) {
 		return Day{}, err
 	}
 	result := Day{DraftFrames: p.DraftFrames, LegacyCoverageSeconds: p.LegacyCoverageSeconds, SchemaVersion: 1, Date: start.Format("2006-01-02"), Timezone: start.Location().String(), EstimatedSeconds: p.EstimatedSeconds, InferredSeconds: p.InferredSeconds, InterpolatedSeconds: p.InterpolatedSeconds, UnknownSeconds: p.UnknownSeconds, AnalyzedBatches: p.AnalyzedBatches, PendingBatches: p.PendingBatches, FailedBatches: p.FailedBatches, Activities: []Activity{}, SourceBatches: []string{}}
+	// Only committed sources contribute exported duration; draft and queue
+	// counts stay visible without weakening the durable source manifest.
+	result.WorkTime = journal.ReportWorkTime(reports, start, end)
 	result.Ongoing = time.Now().In(start.Location()).Before(end)
 	for _, r := range reports {
 		result.SourceBatches = append(result.SourceBatches, r.BatchID)

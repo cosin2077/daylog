@@ -10,6 +10,12 @@ import (
 // Transition records contain no window titles or keystrokes. Sample records
 // reference local images; repeated samples preserve time without saving JPEGs.
 func (r *Runner) observe(o Observation) error {
+	if o.MaxGapSeconds == 0 {
+		o.MaxGapSeconds = r.observationGap
+		if o.MaxGapSeconds == 0 {
+			o.MaxGapSeconds = r.Config.MaxGapSeconds
+		}
+	}
 	if len(r.draft.Frames) > 0 {
 		// A wake after hours of sleep must not create a many-hour batch: the
 		// dated event log records the real wake, the batch closes at its bound.

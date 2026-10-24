@@ -27,7 +27,11 @@ func (s *Store) ExportDay(day time.Time) (PeriodReport, []Report, error) {
 		if err = ReadJSON(filepath.Join(s.Root, "draft.json"), &draft); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		view = buildPeriodRange("day", day, start, end, reports, pending, draft)
+		observations, err := s.ReadObservations(start, end)
+		if err != nil {
+			return err
+		}
+		view = buildPeriodRange("day", day, start, end, reports, pending, draft, newWorkLedger(reports, pending, draft, observations))
 		return nil
 	})
 	return view, reports, err

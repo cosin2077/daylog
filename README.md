@@ -79,7 +79,7 @@ daylog config --endpoint https://api.example.com/v1/chat/completions --model vis
 
 `--api-key` 会把密钥明文写入 `~/.daylog/config.json` 的 `ai.api_key`，也可以直接编辑这个字段。读取优先级为：JSON 明文密钥 → 指定环境变量 → 系统凭据存储（macOS 钥匙串 / Windows Credential Manager）。环境变量和 `--api-key-stdin` 安全存储方式均为可选。
 
-修改后若正在记录，执行 `daylog stop`、`daylog start` 生效。`daylog config --agent auto` 切回本机 Agent；`daylog config -h` 查看完整方法。
+修改后若正在记录，执行 `daylog restart` 生效；保留暂停到期时间与登录自启设置。`daylog config --agent auto` 切回本机 Agent；`daylog config -h` 查看完整方法。
 
 ## 所有使用数据都在 ~/.daylog
 
@@ -112,9 +112,18 @@ Windows 包和更新使用固定发布者的 RSA 签名校验，绑定版本、�
 
 Daylog 是 **Go 命令行工具 + macOS App 包 + 用户级 LaunchAgent 后台服务**。`~/Applications/Daylog.app` 装有同一个 Go 可执行文件、权限身份和图标；`~/.local/bin/daylog` 是它的命令入口。App 目前没有独立窗口、菜单栏界面或 Dock 常驻界面；报告在浏览器打开。
 
-`daylog start` 启动后台进程，退出终端或 Agent 对话不会停止记录；`daylog stop` 停止后台。默认不登录启动，按需使用 `start --login`。后台使用较低进程优先级和低优先级磁盘 I/O；截图由少量原生桥接代码调用 ScreenCaptureKit。
+`daylog start` 启动后台进程，退出终端或 Agent 对话不会停止记录；`daylog stop` 停止后台。`daylog restart` 重启已运行的后台，确认新进程就绪，并保留暂停到期时间和登录自启设置；未运行时用 `start`。默认不登录启动，按需使用 `start --login`。后台使用较低进程优先级和低优先级磁盘 I/O；截图由少量原生桥接代码调用 ScreenCaptureKit。
 
 ## 开始记录后会发生什么
+
+
+### 电脑工作估时
+
+`daylog status` 和 `daylog today` 区分电脑工作总估时、已归类与未归类时间；日、周、月和时段报告使用同一计算方式。连续且间隔有界的可用采样即使没有识别出任务，也保留为未归类工作估时，不自动分配到任务排行。当前草稿和待整理采样可以计入本地工作估时；「待整理0段」不代表所有时间均已归类。
+
+新配置默认连续无键鼠输入20分钟后按离开处理，可用 `daylog config --idle-minutes 20` 设置，`--idle-minutes 0` 关闭此判断。已存在的配置不会被升级悄悄改写，修改后运行 `daylog restart`。前20分钟可包含阅读或思考估时，从达到阈值时起不计工作，恢复输入后继续。锁屏、息屏及休眠不计电脑工作；暂停、采集失败或长时间缺测单列，不能据此判断没有工作。该口径适合主要基于电脑工作的使用方式，估时不等于确认注意力。
+
+历史只按已存在的采样时间重新汇总，不重新识图或改写活动解释，也不补造旧空闲阈值停止采集期间的数据。JSON 新增 `work_time`（总估时、已归类、未归类、未工作和采集不足）；已有 `estimated_seconds` 保持任务估时含义。
 
 `daylog start` 准备后台服务并检查权限，按电源和空闲策略采样。相似画面复用同批截图，仍保存观察时间；应用切换、锁屏、空闲和采样中断留下状态边界。默认约 15 分钟封批，目标选 4 张、最多 8 张，优先保留应用切换，再兼顾内容变化和时间分布。稳定画面可能只需一张。旧配置中明确设置的上限继续生效。
 

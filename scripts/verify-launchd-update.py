@@ -66,6 +66,15 @@ try:
             cli("resume")
         before = ready(paused)
         pause_until = before.get("pause_until")
+        restarted = json.loads(cli("restart", "--json", timeout=30))
+        assert restarted["state"] == "restarted"
+        current = ready(paused)
+        assert current["pid"] != before["pid"] and current["started_at"] > before["started_at"], "restart accepted the old daemon"
+        if paused:
+            assert current["pause_until"] == pause_until and current["saved_frames"] == 0, "restart lost pause or captured early"
+        assert hashlib.sha256((data / "config.json").read_bytes()).hexdigest() == digest
+        assert plistlib.loads(plist.read_bytes())["RunAtLoad"] is False, "restart changed login startup"
+        before = current
         result = json.loads(cli("update", "--force", "--json", timeout=60))
         assert result["state"] == "updated" and result["restarted"]
         after = ready(paused)
@@ -76,7 +85,7 @@ try:
         assert after["started_at"] > before["started_at"], "old status mistaken for restart"
         assert hashlib.sha256((data / "config.json").read_bytes()).hexdigest() == digest
         before = after
-    print("PASS: three real LaunchAgent update swaps, preserved pause before first capture, new PIDs, published status and unchanged config")
+    print("PASS: three real LaunchAgent restarts and update swaps, preserved pause before first capture, new PIDs, published status, unchanged config and login startup")
 finally:
     if plist is not None:
         label = plist.stem

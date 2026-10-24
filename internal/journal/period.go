@@ -66,6 +66,7 @@ type TimeBucket struct {
 }
 
 type PeriodReport struct {
+	WorkTime           WorkTime          `json:"work_time"`
 	AxisTicks          []time.Time       `json:"axis_ticks,omitempty"`
 	Rhythm             []RhythmBlock     `json:"rhythm,omitempty"`
 	InferredSeconds    int64             `json:"inferred_seconds"`
@@ -101,13 +102,14 @@ type PeriodReport struct {
 }
 
 type Overview struct {
-	Periods     []PeriodReport `json:"periods,omitempty"`
-	Calendar    []PeriodReport `json:"calendar,omitempty"`
-	Anchor      string         `json:"anchor"`
-	GeneratedAt time.Time      `json:"generated_at"`
-	Timezone    string         `json:"timezone"`
-	Sample      bool           `json:"sample"`
-	Views       []PeriodReport `json:"views"`
+	IdleAfterSeconds int            `json:"idle_after_seconds,omitempty"`
+	Periods          []PeriodReport `json:"periods,omitempty"`
+	Calendar         []PeriodReport `json:"calendar,omitempty"`
+	Anchor           string         `json:"anchor"`
+	GeneratedAt      time.Time      `json:"generated_at"`
+	Timezone         string         `json:"timezone"`
+	Sample           bool           `json:"sample"`
+	Views            []PeriodReport `json:"views"`
 }
 
 func PeriodBounds(period string, anchor time.Time) (time.Time, time.Time, error) {
@@ -151,22 +153,32 @@ func (s *Store) Overview(anchor time.Time) (Overview, error) {
 		if err = ReadJSON(filepath.Join(s.Root, "draft.json"), &draft); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		overview = BuildOverview(anchor, reports, pending, draft)
+		observations, err := s.ReadObservations(start, end)
+		if err != nil {
+			return err
+		}
+		overview = BuildOverview(anchor, reports, pending, draft, observations...)
+		config, err := ReadConfig(s.Root)
+		if err != nil {
+			return err
+		}
+		overview.IdleAfterSeconds = config.IdleSeconds
 		return nil
 	})
 	return overview, err
 }
 
 // Period summaries reuse validated activity cards; they make no model calls.
-func BuildOverview(anchor time.Time, reports []Report, pending []Batch, draft Batch) Overview {
+func BuildOverview(anchor time.Time, reports []Report, pending []Batch, draft Batch, observations ...Observation) Overview {
 	zone := anchor.Location().String()
 	if zone == "Local" {
 		zone = "本机时区"
 	}
 	o := Overview{Anchor: anchor.Format("2006-01-02"), GeneratedAt: time.Now().In(anchor.Location()), Timezone: zone, Views: []PeriodReport{}}
+	ledger := newWorkLedger(reports, pending, draft, observations)
 	for _, kind := range []string{"day", "week", "month"} {
-		view := buildPeriod(kind, anchor, reports, pending, draft)
-		view.Comparison = buildComparison(kind, anchor, o.GeneratedAt, reports)
+		view := buildPeriod(kind, anchor, reports, pending, draft, ledger)
+		view.Comparison = buildComparison(kind, anchor, o.GeneratedAt, reports, ledger)
 		o.Views = append(o.Views, view)
 	}
 	start, end, _ := PeriodBounds("month", anchor)
@@ -182,21 +194,21 @@ func BuildOverview(anchor time.Time, reports []Report, pending []Batch, draft Ba
 		end = weekEnd
 	}
 	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
-		view := buildPeriod("day", day, reports, pending, draft)
-		view.Comparison = buildComparison("day", day, o.GeneratedAt, reports)
+		view := buildPeriod("day", day, reports, pending, draft, ledger)
+		view.Comparison = buildComparison("day", day, o.GeneratedAt, reports, ledger)
 		o.Calendar = append(o.Calendar, view)
 	}
 	_, monthEnd, _ := PeriodBounds("month", anchor)
 	for month := navigationMonthStart; month.Before(monthEnd); month = month.AddDate(0, 1, 0) {
 		monthStart, _, _ := PeriodBounds("month", month)
-		view := buildPeriod("month", monthStart, reports, pending, draft)
-		view.Comparison = buildComparison("month", monthStart, o.GeneratedAt, reports)
+		view := buildPeriod("month", monthStart, reports, pending, draft, ledger)
+		view.Comparison = buildComparison("month", monthStart, o.GeneratedAt, reports, ledger)
 		o.Periods = append(o.Periods, view)
 	}
 	firstWeek, _, _ := PeriodBounds("week", start)
 	for week := firstWeek; week.Before(end); week = week.AddDate(0, 0, 7) {
-		view := buildPeriod("week", week, reports, pending, draft)
-		view.Comparison = buildComparison("week", week, o.GeneratedAt, reports)
+		view := buildPeriod("week", week, reports, pending, draft, ledger)
+		view.Comparison = buildComparison("week", week, o.GeneratedAt, reports, ledger)
 		o.Periods = append(o.Periods, view)
 	}
 	return o
@@ -235,12 +247,12 @@ func category(raw string) string {
 
 var activityCategories = []string{"写代码", "写东西", "查资料", "聊天沟通", "看内容", "玩游戏", "处理杂事", "未细分"}
 
-func buildPeriod(kind string, anchor time.Time, reports []Report, pending []Batch, draft Batch) PeriodReport {
+func buildPeriod(kind string, anchor time.Time, reports []Report, pending []Batch, draft Batch, ledgers ...*workLedger) PeriodReport {
 	start, end, _ := PeriodBounds(kind, anchor)
-	return buildPeriodRange(kind, anchor, start, end, reports, pending, draft)
+	return buildPeriodRange(kind, anchor, start, end, reports, pending, draft, ledgers...)
 }
 
-func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Report, pending []Batch, draft Batch) PeriodReport {
+func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Report, pending []Batch, draft Batch, ledgers ...*workLedger) PeriodReport {
 	prepared := make([]Report, len(reports))
 	for i, r := range reports {
 		prepared[i] = estimateReport(r)
@@ -379,6 +391,14 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 	p.EstimatedSeconds = covered(estimated)
 	p.InterpolatedSeconds = covered(interpolated)
 	p.InferredSeconds = covered(inferred)
+	ledger := (*workLedger)(nil)
+	if len(ledgers) > 0 {
+		ledger = ledgers[0]
+	}
+	if ledger == nil {
+		ledger = newWorkLedger(reports, pending, draft, nil)
+	}
+	p.WorkTime = ledger.summary(start, end, estimated)
 	p.UnknownSeconds = covered(unknown)
 	for _, part := range unknown {
 		if len(p.UnknownSpans) > 0 && !part.start.After(p.UnknownSpans[len(p.UnknownSpans)-1].End) {
@@ -405,7 +425,7 @@ func buildPeriodRange(kind string, anchor, start, end time.Time, reports []Repor
 	for day := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location()); day.Before(end); day = day.AddDate(0, 0, 1) {
 		key := day.Format("2006-01-02")
 		seconds := covered(byDay[key])
-		if dayCount[key] > 0 {
+		if dayCount[key] > 0 || covered(clippedWorkSpans(ledger.work, day, day.AddDate(0, 0, 1))) > 0 {
 			p.ActiveDays++
 		}
 		p.Days = append(p.Days, DaySummary{Date: key, Activities: dayCount[key], CoverageSeconds: seconds, PendingBatches: dayPending[key]})
@@ -484,7 +504,16 @@ func (s *Store) RangeOverview(start, end time.Time) (Overview, error) {
 		if err = ReadJSON(filepath.Join(s.Root, "draft.json"), &draft); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		out = Overview{Anchor: start.Format("2006-01-02"), GeneratedAt: time.Now().In(start.Location()), Timezone: start.Location().String(), Views: []PeriodReport{buildPeriodRange("range", start, start, end, reports, pending, draft)}}
+		observations, err := s.ReadObservations(start, end)
+		if err != nil {
+			return err
+		}
+		out = Overview{Anchor: start.Format("2006-01-02"), GeneratedAt: time.Now().In(start.Location()), Timezone: start.Location().String(), Views: []PeriodReport{buildPeriodRange("range", start, start, end, reports, pending, draft, newWorkLedger(reports, pending, draft, observations))}}
+		config, err := ReadConfig(s.Root)
+		if err != nil {
+			return err
+		}
+		out.IdleAfterSeconds = config.IdleSeconds
 		return nil
 	})
 	return out, err

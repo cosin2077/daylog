@@ -13,10 +13,11 @@ type Frame struct {
 }
 
 type Observation struct {
-	At      time.Time `json:"at"`
-	App     string    `json:"app,omitempty"`
-	FrameID string    `json:"frame_id,omitempty"`
-	State   string    `json:"state"`
+	MaxGapSeconds int       `json:"max_gap_seconds,omitempty"`
+	At            time.Time `json:"at"`
+	App           string    `json:"app,omitempty"`
+	FrameID       string    `json:"frame_id,omitempty"`
+	State         string    `json:"state"`
 }
 
 type TimeSpan struct {
@@ -106,6 +107,8 @@ type TaskObservation struct {
 }
 
 type Status struct {
+	IdleAfterSeconds      int        `json:"idle_after_seconds"`
+	TodayWorkTime         WorkTime   `json:"today_work_time"`
 	TodayEstimatedSeconds int64      `json:"today_estimated_seconds"`
 	InterruptedBatches    int        `json:"interrupted_batches"`
 	ControlError          string     `json:"control_error,omitempty"`

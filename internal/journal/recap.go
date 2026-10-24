@@ -15,6 +15,7 @@ type ReviewSummary struct {
 }
 
 type PeriodComparison struct {
+	WorkSeconds      int64     `json:"work_seconds"`
 	Label            string    `json:"label"`
 	Start            time.Time `json:"start"`
 	End              time.Time `json:"end"`
@@ -29,7 +30,7 @@ type PeriodComparison struct {
 	RecordedDays     int       `json:"recorded_days"`
 }
 
-func buildComparison(kind string, anchor, now time.Time, reports []Report) *PeriodComparison {
+func buildComparison(kind string, anchor, now time.Time, reports []Report, ledgers ...*workLedger) *PeriodComparison {
 	start, end, _ := PeriodBounds(kind, anchor)
 	var previous time.Time
 	switch kind {
@@ -64,8 +65,8 @@ func buildComparison(kind string, anchor, now time.Time, reports []Report) *Peri
 		}
 		label += "同进度"
 	}
-	prior := buildPeriodRange(kind, previous, previousStart, previousEnd, reports, nil, Batch{})
-	return &PeriodComparison{Label: label, Start: previousStart, End: previousEnd, CurrentEnd: currentEnd, Partial: partial, Available: len(prior.Activities) > 0, EstimatedSeconds: prior.EstimatedSeconds, LongestSeconds: prior.Continuity.LongestSeconds, TaskSwitches: prior.Continuity.TaskSwitches, ComparablePairs: prior.Continuity.ComparablePairs, Activities: len(prior.Activities), RecordedDays: prior.ActiveDays}
+	prior := buildPeriodRange(kind, previous, previousStart, previousEnd, reports, nil, Batch{}, ledgers...)
+	return &PeriodComparison{WorkSeconds: prior.WorkTime.EstimatedSeconds, Label: label, Start: previousStart, End: previousEnd, CurrentEnd: currentEnd, Partial: partial, Available: len(prior.Activities) > 0 || prior.WorkTime.EstimatedSeconds > 0, EstimatedSeconds: prior.EstimatedSeconds, LongestSeconds: prior.Continuity.LongestSeconds, TaskSwitches: prior.Continuity.TaskSwitches, ComparablePairs: prior.Continuity.ComparablePairs, Activities: len(prior.Activities), RecordedDays: prior.ActiveDays}
 }
 
 func buildReview(p PeriodReport) ReviewSummary {
@@ -76,6 +77,9 @@ func buildReview(p PeriodReport) ReviewSummary {
 	next := map[string]string{"day": "下次", "week": "下周", "month": "下个月", "range": "下次"}[p.Period]
 	if next == "" {
 		next = "下次"
+	}
+	if len(p.Activities) == 0 && p.WorkTime.EstimatedSeconds > 0 {
+		return ReviewSummary{Headline: scope + "已有电脑工作估时，具体活动尚未归类。", Advice: "先查看未归类时间；电脑活动估时不等于已经确认了任务内容。"}
 	}
 	if len(p.Activities) == 0 && p.AnalyzedBatches > 0 {
 		return ReviewSummary{Headline: fmt.Sprintf("%s已整理 %d 段记录，尚未识别出可描述的活动。", scope, p.AnalyzedBatches), Advice: "可展开未估时区间查看记录范围；检查截图是否清晰、模型是否支持读图。没有识别到活动不代表没有记录。"}
@@ -109,8 +113,8 @@ func buildReview(p PeriodReport) ReviewSummary {
 			r.Headline = fmt.Sprintf("%s记录了 %d 项活动，暂不足以概括主线。", scope, len(p.Activities))
 		}
 	}
-	if p.UnknownSeconds > p.EstimatedSeconds && p.EstimatedSeconds > 0 {
-		r.Headline = "仅看已估时部分，" + r.Headline
+	if (p.UnknownSeconds > p.EstimatedSeconds || p.WorkTime.UnclassifiedSeconds > p.WorkTime.ClassifiedSeconds) && p.EstimatedSeconds > 0 {
+		r.Headline = "仅看已归类部分，" + r.Headline
 	}
 	if !hasTimedTask || p.EstimatedSeconds == 0 {
 		r.Advice = "目前缺少可估时的任务，先查看单帧和未估时记录、检查采集与整理状态；不要据此判断主要时间去向。"
@@ -118,6 +122,10 @@ func buildReview(p PeriodReport) ReviewSummary {
 	}
 	if p.PendingBatches > p.AnalyzedBatches {
 		r.Advice = "当前仍有较多记录待整理；先处理待整理或失败的批次，再比较主要任务和时段。"
+		return r
+	}
+	if p.WorkTime.UnclassifiedSeconds > p.WorkTime.ClassifiedSeconds {
+		r.Advice = "电脑工作估时中仍有较多时间未归类；先查看未归类区间，再判断主要任务的时间占比。"
 		return r
 	}
 	if (p.InterpolatedSeconds+p.InferredSeconds)*2 > p.EstimatedSeconds {

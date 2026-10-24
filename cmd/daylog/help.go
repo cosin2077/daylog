@@ -13,6 +13,7 @@ var commandUsage = map[string]string{
 	"pause":      "daylog pause [--minutes 30] [--json]\n\n暂停 1–1440 分钟，到时自动恢复。提前恢复：daylog resume。",
 	"resume":     "daylog resume [--json]\n\n恢复记录，并确认后台已经恢复。",
 	"start":      "daylog start [--login] [--json]\n\n开始记录，首次需授权录屏。--login 同时启用登录启动。",
+	"restart":    "daylog restart [--json]\n\n重启已运行的后台并确认新进程就绪；保留原暂停到期时间与登录自启设置。后台未运行时请用 start。",
 	"stop":       "daylog stop [--json]\n\n停止记录，保留日记和截图，并关闭登录启动。",
 	"doctor":     "daylog doctor [--json]\n\n检查屏幕、电源和配置，显示模型安装及最近整理结果；不截图、不联网调用模型。",
 	"agents":     "daylog agents [--json]\n\n查看本机 Agent 安装及图片适配情况；安装状态不代表模型已连通。",

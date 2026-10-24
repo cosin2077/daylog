@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 )
 
 func domain() string { return "gui/" + strconv.Itoa(os.Getuid()) }
@@ -15,8 +16,8 @@ func loaded(root string) bool {
 }
 func IsLoaded(root string) bool { return loaded(root) }
 func launch(args ...string) error {
-	if err := exec.Command("/bin/launchctl", args...).Run(); err != nil {
-		return fmt.Errorf("launchctl failed: %w", err)
+	if out, err := exec.Command("/bin/launchctl", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("launchctl %s 失败：%w；%s", args[0], err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

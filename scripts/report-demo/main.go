@@ -39,6 +39,17 @@ func main() {
 			id := journal.ID(at)
 			end := at.Add(time.Duration(12+(i*7)%26) * time.Minute)
 			reports = append(reports, journal.Report{SchemaVersion: 2, AppSource: "window_server", Start: at, End: end.Add(7 * time.Minute), UnknownSpans: []journal.TimeSpan{{Start: end, End: end.Add(7 * time.Minute)}}, BatchID: id, Source: "agent:claude", CreatedAt: at.Add(20 * time.Minute), Cards: []journal.Card{{ActivityID: "act_" + id, TaskID: fmt.Sprintf("task_%d", (i+day+48)%len(tasks)), Apps: []string{"Demo Editor"}, DurationMethod: "bounded_observation_v1", Confidence: "medium", Spans: []journal.TimeSpan{{Start: at, End: end}}, Start: at, End: end, Title: task.title, Summary: task.summary, Category: task.category, Evidence: []string{id, journal.ID(at.Add(5 * time.Minute))}}}})
+			last := &reports[len(reports)-1]
+			last.EstimationVersion = "bounded_neighbors_v4"
+			for point := last.Start; !point.After(last.End); point = point.Add(30 * time.Second) {
+				observation := journal.TaskObservation{At: point, State: "sampled", App: "Demo Editor", MaxGapSeconds: 60}
+				if !point.After(end) {
+					observation.TaskID = last.Cards[0].TaskID
+					observation.ActivityID = last.Cards[0].ActivityID
+				}
+				last.TaskObservations = append(last.TaskObservations, observation)
+			}
+
 		}
 	}
 	// Explicit synthetic interruptions: code -> chat -> code -> feed -> notes -> code.

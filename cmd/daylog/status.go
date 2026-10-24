@@ -89,9 +89,16 @@ func statusCommand(s *journal.Store, args []string) error {
 			}
 		}
 	}
-	reports, reportErr := s.Reports(now.Add(-48*time.Hour), now.Add(time.Minute))
+	view, todayReports, reportErr := s.ExportDay(now)
 	if reportErr == nil {
-		status.TodayEstimatedSeconds = journal.BuildOverview(now, reports, nil, journal.Batch{}).Views[0].EstimatedSeconds
+		status.TodayEstimatedSeconds = view.EstimatedSeconds
+		status.TodayWorkTime = view.WorkTime
+	}
+	reports := todayReports
+	if len(reports) == 0 {
+		reports, reportErr = s.Reports(now.Add(-48*time.Hour), now.Add(time.Minute))
+	}
+	if reportErr == nil {
 		for _, r := range reports {
 			if status.LastAnalysis == nil || r.CreatedAt.After(*status.LastAnalysis) {
 				at := r.CreatedAt
@@ -132,6 +139,10 @@ func writeStatus(w io.Writer, s journal.Status, now time.Time, running bool) {
 		state = "! Daylog · 采集等待恢复"
 	}
 	fmt.Fprintln(w, state)
+	writeWorkStatus(w, s.TodayWorkTime)
+	if s.IdleAfterSeconds > 0 {
+		fmt.Fprintf(w, "  无输入阈值  %s\n", workDuration(int64(s.IdleAfterSeconds)))
+	}
 	if s.Paused {
 		if s.PauseUntil != nil {
 			fmt.Fprintf(w, "  自动恢复  %s\n", s.PauseUntil.Local().Format("01-02 15:04"))
@@ -248,11 +259,7 @@ func writeCompactStatus(w io.Writer, s journal.Status, now time.Time, running bo
 		state = recordingReason(s.Error)
 	}
 	fmt.Fprintln(w, "Daylog · "+state)
-	today := "暂未估时"
-	if s.TodayEstimatedSeconds > 0 {
-		today = "约 " + statusDuration(time.Duration(s.TodayEstimatedSeconds)*time.Second)
-	}
-	fmt.Fprintln(w, "  今天时长  "+today)
+	writeWorkStatus(w, s.TodayWorkTime)
 	if s.Paused && s.PauseUntil != nil {
 		fmt.Fprintln(w, "  自动恢复  "+s.PauseUntil.Local().Format("15:04"))
 	}
@@ -282,4 +289,28 @@ func writeCompactStatus(w io.Writer, s journal.Status, now time.Time, running bo
 		next = "daylog pending 查看原因"
 	}
 	fmt.Fprintln(w, "  下一步    "+next)
+}
+
+func workDuration(seconds int64) string {
+	if seconds <= 0 {
+		return "0 秒"
+	}
+	return statusDuration(time.Duration(seconds) * time.Second)
+}
+
+func workEstimateLabel(w journal.WorkTime) string {
+	if w.EstimatedSeconds > 0 {
+		return "约 " + workDuration(w.EstimatedSeconds)
+	}
+	if w.AwaySeconds > 0 && w.MissingSeconds == 0 {
+		return "0 秒"
+	}
+	return "暂未估时"
+}
+
+func writeWorkStatus(w io.Writer, timing journal.WorkTime) {
+	fmt.Fprintln(w, "  今天工作  "+workEstimateLabel(timing))
+	if timing.Available {
+		fmt.Fprintf(w, "  其中      已归类 %s · 未归类 %s\n", workDuration(timing.ClassifiedSeconds), workDuration(timing.UnclassifiedSeconds))
+	}
 }

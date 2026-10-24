@@ -35,6 +35,7 @@ type Runner struct {
 	lastFrame       string
 	observedState   string
 	observedApp     string
+	observationGap  int
 	lastTick        time.Time
 	lastCleanup     time.Time
 	lastInventory   time.Time
@@ -67,7 +68,7 @@ func (r *Runner) Run(ctx context.Context) (runErr error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	r.wake = make(chan struct{}, 1)
-	r.status = Status{PID: os.Getpid(), StartedAt: time.Now().UTC()}
+	r.status = Status{PID: os.Getpid(), StartedAt: time.Now().UTC(), IdleAfterSeconds: r.Config.IdleSeconds}
 	if err = r.restorePause(time.Now()); err != nil {
 		return err
 	}
@@ -224,6 +225,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		return time.Minute
 	}
 	p := PowerPolicy(r.Config, env)
+	r.observationGap = min(r.Config.MaxGapSeconds, 2*max(r.Config.MinSaveSeconds, int(p.Delay/time.Second)))
 	r.mu.Lock()
 	if r.paused && !r.pauseUntil.IsZero() && !now.Before(r.pauseUntil) {
 		r.paused = false
@@ -397,10 +399,7 @@ func (r *Runner) step(ctx context.Context, now time.Time) time.Duration {
 		return p.Delay
 	}
 	if len(r.draft.Frames) == 0 {
-		gap := int(2 * captureInterval / time.Second)
-		if gap > r.Config.MaxGapSeconds {
-			gap = r.Config.MaxGapSeconds
-		}
+		gap := r.observationGap
 		r.draft = Batch{AppSource: native.AppSource, SchemaVersion: 2, ID: ID(now), Start: now.UTC(), MaxGapSeconds: gap, SupportGapSeconds: r.Config.MaxGapSeconds}
 	}
 	frame.Change = Difference(fp, r.lastFingerprint)

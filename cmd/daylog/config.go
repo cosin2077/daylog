@@ -21,6 +21,8 @@ const configHelp = `Daylog — 配置
       关闭系统失败通知；status、报告和日志仍显示失败信息
   daylog config --profile balanced|battery|detailed
       选择均衡、省电或精细档；不改变模型和隐私设置
+  daylog config --idle-minutes 20
+      连续无键鼠输入满20分钟后按离开处理；0 表示不启用此判断
   daylog config
       查看中文配置概览（隐藏密钥内容）
   daylog config --json
@@ -46,13 +48,14 @@ const configHelp = `Daylog — 配置
 JSON 支持 ai.api_key 明文密钥；环境变量和钥匙串也可选。
 密钥读取顺序：ai.api_key → key_env 指定的环境变量 → 钥匙串。
 --file - 与 --api-key-stdin 不能同时使用。
-正在记录时，修改配置后用 daylog stop、daylog start 重新启动以生效。
+正在记录时，修改配置后用 daylog restart 生效；保留暂停和登录自启设置。
 `
 
 func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Writer, setSecret func(string) error) error {
 	f := flags("config")
 	notifications := f.Bool("notifications", true, "enable system notifications for persistent analysis failures")
 	profile := f.String("profile", "", "balanced, battery or detailed")
+	idleMinutes := f.Int("idle-minutes", 20, "minutes without input before away, 0 disables, 1..1440")
 	file := f.String("file", "", "complete JSON config file or stdin")
 	endpoint := f.String("endpoint", "", "full Chat Completions endpoint")
 	model := f.String("model", "", "vision model name")
@@ -115,6 +118,12 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 	}
 	if changed["notifications"] {
 		c.Diagnostics.FailureNotifications = *notifications
+	}
+	if changed["idle-minutes"] {
+		if *idleMinutes < 0 || *idleMinutes > 1440 {
+			return errors.New("无输入阈值必须为 0–1440 分钟；0 表示关闭")
+		}
+		c.IdleSeconds = *idleMinutes * 60
 	}
 	if changed["agent-timeout"] {
 		if *agentTimeout < 10 || *agentTimeout > 600 {
@@ -202,7 +211,7 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 		c.AI.APIKey = ""
 		c.AI.KeyEnv = ""
 	}
-	edited := changed["notifications"] || changed["agent-timeout"] || changed["api-fallback"] || changed["fallback-models"] || changed["profile"] || *file != "" || customAPI || changed["key-env"] || changed["agent"] || changed["api-key"] || *keyStdin
+	edited := changed["idle-minutes"] || changed["notifications"] || changed["agent-timeout"] || changed["api-fallback"] || changed["fallback-models"] || changed["profile"] || *file != "" || customAPI || changed["key-env"] || changed["agent"] || changed["api-key"] || *keyStdin
 	if edited {
 		if err := journal.WriteJSON(filepath.Join(s.Root, "config.json"), c); err != nil {
 			return err
@@ -225,7 +234,7 @@ func configure(s *journal.Store, args []string, stdin io.Reader, stdout io.Write
 		fmt.Fprintln(stdout, "API Key 已保存到 macOS 钥匙串。")
 	}
 	if _, err := journal.SendControl(s.Root, journal.Control{Op: "status"}); err == nil {
-		fmt.Fprintln(stdout, "执行 daylog stop 后再 daylog start 应用配置。")
+		fmt.Fprintln(stdout, "执行 daylog restart 应用配置；保留暂停与登录自启设置。")
 	}
 	return nil
 }

@@ -176,6 +176,75 @@ func waitRuntimeReady(ctx context.Context, probe func() (journal.Status, error),
 	}
 }
 
+type restartActions struct {
+	managed   bool
+	status    func() (journal.Status, error)
+	savePause func(bool, *time.Time) error
+	stop      func() error
+	launch    func() error
+}
+
+func restartWith(ctx context.Context, a restartActions) (journal.Status, error) {
+	previous, err := a.status()
+	if err != nil {
+		return journal.Status{}, errors.New("后台未运行；请用 daylog start 开始记录")
+	}
+	if !a.managed {
+		return journal.Status{}, errors.New("当前不是已配置的后台服务；请结束前台 run，再用 daylog start 启动")
+	}
+	if err = a.savePause(previous.Paused, previous.PauseUntil); err != nil {
+		return journal.Status{}, err
+	}
+	if err = a.stop(); err != nil {
+		return journal.Status{}, err
+	}
+	if err = a.launch(); err != nil {
+		return journal.Status{}, fmt.Errorf("后台启动失败，原暂停与登录自启配置已保留：%w", err)
+	}
+	return waitRestartReady(ctx, a.status, previous)
+}
+
+func waitRestartReady(ctx context.Context, probe func() (journal.Status, error), previous journal.Status) (journal.Status, error) {
+	status, err := waitRuntimeReady(ctx, func() (journal.Status, error) {
+		current, err := probe()
+		if err == nil && (current.PID <= 0 || current.StartedAt.IsZero() || current.StartedAt.Equal(previous.StartedAt)) {
+			return journal.Status{}, errors.New("后台仍在切换进程")
+		}
+		return current, err
+	}, true)
+	if err != nil {
+		return status, err
+	}
+	shouldPause := previous.Paused && (previous.PauseUntil == nil || time.Now().Before(*previous.PauseUntil))
+	if status.Paused != shouldPause || shouldPause && previous.PauseUntil != nil && (status.PauseUntil == nil || !status.PauseUntil.Equal(*previous.PauseUntil)) {
+		return status, errors.New("后台已重启，但暂停状态未获确认；请运行 daylog status 检查")
+	}
+	return status, nil
+}
+
+func restartRecording(ctx context.Context, s *journal.Store, asJSON bool) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	_, configErr := os.Stat(service.Path(home, s.Root))
+	status, err := restartWith(ctx, restartActions{
+		managed:   configErr == nil,
+		status:    func() (journal.Status, error) { return journal.SendControl(s.Root, journal.Control{Op: "status"}) },
+		savePause: s.SavePause,
+		stop:      func() error { return stopRuntime(ctx, s.Root) },
+		launch:    func() error { return service.Start(home, s.Root) },
+	})
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return output(map[string]any{"state": "restarted", "status": status})
+	}
+	fmt.Println("Daylog 后台已重启，暂停与登录自启设置已保留。")
+	return nil
+}
+
 func startRecording(ctx context.Context, s *journal.Store, login, asJSON bool) error {
 	if _, err := journal.ReadConfig(s.Root); err != nil {
 		return err

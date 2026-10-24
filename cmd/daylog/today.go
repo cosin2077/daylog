@@ -25,25 +25,13 @@ func todayCommand(s *journal.Store, args []string) error {
 	if err != nil {
 		return errors.New("日期格式应为 YYYY-MM-DD")
 	}
-	end := start.AddDate(0, 0, 1)
-	reports, err := s.Reports(start, end)
+	view, reports, err := s.ExportDay(start)
 	if err != nil {
 		return err
 	}
-	pending, err := s.Pending(0)
-	if err != nil {
-		return err
-	}
-	count, total := 0, 0
-	for _, batch := range pending {
-		if batch.Start.Before(end) && batch.End.After(start) {
-			count++
-		}
-	}
-	view := journal.BuildOverview(start, reports, pending, journal.Batch{}).Views[0]
-	total = len(view.Activities)
+	count, total := view.PendingBatches, len(view.Activities)
 	if *asJSON {
-		return output(map[string]any{"date": *date, "reports": reports, "activities": view.Activities, "activity_count": total, "pending_batches": count})
+		return output(map[string]any{"date": *date, "reports": reports, "activities": view.Activities, "activity_count": total, "pending_batches": count, "draft_frames": view.DraftFrames, "work_time": view.WorkTime, "estimated_seconds": view.EstimatedSeconds, "unknown_seconds": view.UnknownSeconds})
 	}
 	weekdays := []string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
 	fmt.Printf("Daylog · %s %s · %d 项活动", start.Format("1月2日"), weekdays[start.Weekday()], total)
@@ -51,6 +39,12 @@ func todayCommand(s *journal.Store, args []string) error {
 		fmt.Printf(" · 还有 %d 段待整理", count)
 	}
 	fmt.Print("\n\n")
+	if view.WorkTime.Available {
+		fmt.Printf("电脑工作%s · 已归类 %s · 未归类 %s\n\n", workEstimateLabel(view.WorkTime), workDuration(view.WorkTime.ClassifiedSeconds), workDuration(view.WorkTime.UnclassifiedSeconds))
+		if *explain {
+			fmt.Printf("未工作 %s；采集不足 %s。未归类时间已包含在电脑工作估时中，不自动分配到具体任务。\n", workDuration(view.WorkTime.AwaySeconds), workDuration(view.WorkTime.MissingSeconds))
+		}
+	}
 	if total > 0 {
 		summary := view
 		if summary.EstimatedSeconds > 0 {
