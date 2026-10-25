@@ -41,6 +41,9 @@ func (s Store) keyPath() string   { return filepath.Join(s.directory(), "credent
 func (s Store) lockPath() string  { return filepath.Join(s.directory(), "credentials.lock") }
 
 func (s Store) Exists(name string) (bool, error) {
+	if !validName.MatchString(name) {
+		return false, errors.New("凭据名称无效")
+	}
 	var found bool
 	err := s.withLock(func() error {
 		v, err := s.readVault()
@@ -107,13 +110,24 @@ func (s Store) Get(name string) (string, error) {
 }
 
 func (s Store) Set(name, value string) error {
+	_, err := s.put(name, value, true)
+	return err
+}
+
+// Import installs a legacy credential only if no newer local entry exists.
+// A concurrent setup therefore wins over a migration that began earlier.
+func (s Store) Import(name, value string) (string, error) {
+	return s.put(name, value, false)
+}
+
+func (s Store) put(name, value string, overwrite bool) (string, error) {
 	if !validName.MatchString(name) {
-		return errors.New("凭据名称无效")
+		return "", errors.New("凭据名称无效")
 	}
 	if value == "" || len(value) > 16<<10 {
-		return errors.New("凭据长度无效")
+		return "", errors.New("凭据长度无效")
 	}
-	return s.withLock(func() error {
+	err := s.withLock(func() error {
 		v, err := s.readVault()
 		if errors.Is(err, os.ErrNotExist) {
 			_, keyErr := s.readOrCreateKey()
@@ -123,6 +137,9 @@ func (s Store) Set(name, value string) error {
 			v = vault{Version: formatVersion, Entries: map[string]string{}}
 		} else if err != nil {
 			return err
+		}
+		if !overwrite && v.Entries[name] != "" {
+			return nil
 		}
 		key, err := s.readKey()
 		if err != nil {
@@ -144,6 +161,10 @@ func (s Store) Set(name, value string) error {
 		v.Entries[name] = base64.StdEncoding.EncodeToString(sealed)
 		return s.writeVault(v)
 	})
+	if err != nil {
+		return "", err
+	}
+	return s.Get(name)
 }
 
 func (s Store) Delete(name string) error {
@@ -164,6 +185,12 @@ func (s Store) Delete(name string) error {
 }
 
 func (s Store) readKey() ([]byte, error) {
+	if err := secureFile(s.keyPath()); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errors.New("本地凭据密钥缺失，请恢复 credentials.key 与 credentials.enc 的完整备份")
+		}
+		return nil, err
+	}
 	data, err := os.ReadFile(s.keyPath())
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, errors.New("本地凭据密钥缺失，请重新运行 daylog notion setup")
@@ -182,6 +209,9 @@ func (s Store) readKey() ([]byte, error) {
 
 func (s Store) withLock(fn func() error) error {
 	if err := s.ensureDirectory(); err != nil {
+		return err
+	}
+	if err := secureFile(s.lockPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	f, err := os.OpenFile(s.lockPath(), os.O_CREATE|os.O_RDWR, 0600)
@@ -206,6 +236,13 @@ func (s Store) withLock(fn func() error) error {
 
 func (s Store) ensureDirectory() error {
 	dir := s.directory()
+	if info, err := os.Lstat(dir); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("本地凭据目录不能是符号链接或普通文件")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.New("无法检查本地凭据目录")
+	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return errors.New("无法创建本地凭据目录")
 	}
@@ -216,6 +253,9 @@ func (s Store) ensureDirectory() error {
 }
 
 func (s Store) readOrCreateKey() ([]byte, error) {
+	if err := secureFile(s.keyPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	data, err := os.ReadFile(s.keyPath())
 	if err == nil {
 		if len(data) != 32 {

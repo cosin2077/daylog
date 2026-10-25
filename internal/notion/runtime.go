@@ -43,16 +43,15 @@ func Run(ctx context.Context, root string, secrets SecretStore) {
 					return // ReadSettings already rejects invalid configuration.
 				}
 				token, tokenErr := secrets.Get(settings.SecretName())
-				if tokenErr != nil || token == "" {
-					continue
-				}
-				client := NewClient(token)
-				service := Service{Root: root, Settings: settings, Client: client}
-				config, configErr := journal.ReadConfig(root)
-				if configErr == nil {
-					jobCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-					_ = service.Engine().RunDue(jobCtx, since, time.Now().In(zone), config.ReportRetentionDays, checkpoints...)
-					cancel()
+				if tokenErr == nil && token != "" {
+					client := NewClient(token)
+					service := Service{Root: root, Settings: settings, Client: client}
+					config, configErr := journal.ReadConfig(root)
+					if configErr == nil {
+						jobCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+						_ = service.Engine().RunDue(jobCtx, since, time.Now().In(zone), config.ReportRetentionDays, checkpoints...)
+						cancel()
+					}
 				}
 			}
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) { /* status/check exposes malformed settings without printing data */

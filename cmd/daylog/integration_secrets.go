@@ -55,15 +55,16 @@ func (s integrationSecrets) Get(name string) (string, error) {
 	}
 	legacy := s.legacy.Get(name)
 	if legacy == "" {
-		return "", credentials.ErrNotFound
+		return store.Get(name) // Another reader may have completed migration.
 	}
-	if err = store.Set(name, legacy); err != nil {
+	imported, err := store.Import(name, legacy)
+	if err != nil {
 		return "", fmt.Errorf("旧钥匙串凭据尚未迁移，原条目已保留：%w", err)
 	}
 	check, err := store.Get(name)
-	if err != nil || check != legacy {
+	if err != nil || check != imported {
 		return "", errors.New("旧钥匙串凭据迁移后无法确认，原条目已保留")
 	}
 	_ = s.legacy.Delete(name)
-	return legacy, nil
+	return check, nil
 }

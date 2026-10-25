@@ -142,3 +142,84 @@ func TestMissingKeyDoesNotSilentlyReencryptExistingVault(t *testing.T) {
 		t.Fatal("set overwrote entries without the original key")
 	}
 }
+
+func TestImportDoesNotOverwriteAConcurrentSetup(t *testing.T) {
+	s := Store{Root: filepath.Join(t.TempDir(), "data")}
+	if err := s.Set("notion.fixture", "new-setup-value"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Import("notion.fixture", "stale-keychain-value")
+	if err != nil || got != "new-setup-value" {
+		t.Fatal("stale migration replaced the configured credential", err)
+	}
+}
+
+func TestCredentialCanMoveToAnotherDataDirectory(t *testing.T) {
+	s := Store{Root: filepath.Join(t.TempDir(), "original")}
+	if err := s.Set("notion.fixture", "portable-fixture"); err != nil {
+		t.Fatal(err)
+	}
+	destination := Store{Root: filepath.Join(t.TempDir(), "relocated")}
+	if err := os.MkdirAll(destination.directory(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range [][2]string{{s.keyPath(), destination.keyPath()}, {s.vaultPath(), destination.vaultPath()}} {
+		data, err := os.ReadFile(pair[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(pair[1], data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if value, err := destination.Get("notion.fixture"); err != nil || value != "portable-fixture" {
+		t.Fatal("credential is bound to the original host or directory", err)
+	}
+}
+
+func TestCredentialNameIsAuthenticated(t *testing.T) {
+	s := Store{Root: filepath.Join(t.TempDir(), "data")}
+	if err := s.Set("notion.first", "fixture-secret"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(s.vaultPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v vault
+	if err = json.Unmarshal(data, &v); err != nil {
+		t.Fatal(err)
+	}
+	v.Entries["notion.second"] = v.Entries["notion.first"]
+	data, err = json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(s.vaultPath(), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Get("notion.second"); err == nil {
+		t.Fatal("ciphertext could be transplanted to another credential name")
+	}
+}
+
+func TestSymlinkDirectoryIsRejectedBeforeChangingTargetPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires Unix symlink permissions")
+	}
+	root := t.TempDir()
+	target := t.TempDir()
+	if err := os.Chmod(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "integrations")); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Store{Root: root}).Set("notion.fixture", "fixture"); err == nil {
+		t.Fatal("symlink directory accepted")
+	}
+	info, err := os.Stat(target)
+	if err != nil || info.Mode().Perm() != 0755 {
+		t.Fatal("permissions changed outside the credential directory")
+	}
+}

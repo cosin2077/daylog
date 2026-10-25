@@ -98,3 +98,41 @@ func TestIntegrationSecretsDoNotFallbackFromCorruptFile(t *testing.T) {
 		t.Fatal("keychain was accessed after local corruption")
 	}
 }
+
+type blockedLegacy struct {
+	started chan struct{}
+	proceed chan struct{}
+	deleted bool
+}
+
+func (f *blockedLegacy) Get(string) string {
+	close(f.started)
+	<-f.proceed
+	return "stale-fixture"
+}
+func (f *blockedLegacy) Delete(string) error { f.deleted = true; return nil }
+
+func TestSlowMigrationCannotReplaceNewerCredential(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	legacy := &blockedLegacy{started: make(chan struct{}), proceed: make(chan struct{})}
+	s := integrationSecrets{root: root, legacy: legacy}
+	done := make(chan error, 1)
+	go func() {
+		value, err := s.Get("notion.fixture")
+		if err == nil && value != "fresh-setup-value" {
+			err = errors.New("stale migration returned old credential")
+		}
+		done <- err
+	}()
+	<-legacy.started
+	if err := (credentials.Store{Root: root}).Set("notion.fixture", "fresh-setup-value"); err != nil {
+		t.Fatal(err)
+	}
+	close(legacy.proceed)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !legacy.deleted {
+		t.Fatal("legacy entry was not removed after the portable value was verified")
+	}
+}
