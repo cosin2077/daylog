@@ -21,7 +21,7 @@ import (
 	"daylog/internal/update"
 )
 
-var version = "0.14.0"
+var version = "0.14.1"
 
 const help = `Daylog — 自动记录今天做了什么
 
@@ -474,7 +474,7 @@ func executeCommand(args []string) error {
 		platform.BackgroundPriority()
 		r := journal.Runner{Store: s, Config: c, Source: source, Key: func() string { return apiKey(c) }}
 		if *fixture == "" {
-			r.Background = func(ctx context.Context) { notion.Run(ctx, s.Root, nativeNotionSecrets{}) }
+			r.Background = func(ctx context.Context) { notion.Run(ctx, s.Root, newIntegrationSecrets(s.Root)) }
 		}
 		return r.Run(ctx)
 	case "status":

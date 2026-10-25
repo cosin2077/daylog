@@ -42,7 +42,10 @@ func Run(ctx context.Context, root string, secrets SecretStore) {
 				if checkpointErr != nil {
 					return // ReadSettings already rejects invalid configuration.
 				}
-				token := secrets.Get(settings.SecretName())
+				token, tokenErr := secrets.Get(settings.SecretName())
+				if tokenErr != nil || token == "" {
+					continue
+				}
 				client := NewClient(token)
 				service := Service{Root: root, Settings: settings, Client: client}
 				config, configErr := journal.ReadConfig(root)

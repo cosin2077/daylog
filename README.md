@@ -84,6 +84,7 @@ daylog config --endpoint https://api.example.com/v1/chat/completions --model vis
 ## 所有使用数据都在 ~/.daylog
 
 - `config.json`：配置，默认即可使用。
+- `integrations/credentials.enc`、`integrations/credentials.key`：Notion Token 的本地加密文件及本机密钥；迁移整份数据目录时两者需一起保留。
 - `observations/YYYY-MM-DD.jsonl`：采样和状态变化；重复画面也保留时间线索。
 - `frames/YYYY-MM-DD/`：按本地日期保存的新截图；旧版平铺截图兼容读取。
 - `reports/`：已分析的日记；`reports/report.html` 是最近生成的可视化快照。

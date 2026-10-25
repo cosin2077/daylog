@@ -9,8 +9,39 @@ import (
 	"testing"
 	"time"
 
+	"daylog/internal/credentials"
 	"daylog/internal/notion"
 )
+
+func TestNotionStatusReportsPortableCredentialWithoutReadingIt(t *testing.T) {
+	s := configStore(t)
+	settings, _ := notion.NewSettings("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Asia/Shanghai", "2026-10-18")
+	if err := notion.SaveSettings(s.Root, settings); err != nil {
+		t.Fatal(err)
+	}
+	fixture := "fixture-token-not-real"
+	if err := (credentials.Store{Root: s.Root}).Set(settings.SecretName(), fixture); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := commandOutput(t, "--data", s.Root, "notion", "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), fixture) {
+		t.Fatal("status exposed credential")
+	}
+	var result struct {
+		CredentialStored  bool   `json:"credential_stored"`
+		CredentialFile    string `json:"credential_file"`
+		CredentialStorage string `json:"credential_storage"`
+	}
+	if err = json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.CredentialStored || result.CredentialStorage != "encrypted_file" || !strings.HasSuffix(result.CredentialFile, "integrations/credentials.enc") {
+		t.Fatal("portable credential state missing", string(raw))
+	}
+}
 
 func TestNotionStatusAndDryRunDoNotRequireSecrets(t *testing.T) {
 	s := configStore(t)

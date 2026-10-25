@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"daylog/internal/credentials"
 	"daylog/internal/exports"
 	"daylog/internal/journal"
-	"daylog/internal/native"
 	"daylog/internal/notion"
 	"daylog/internal/platform"
 	"golang.org/x/term"
@@ -28,7 +28,7 @@ daylog notion sync [--date YYYY-MM-DD | --yes] [--dry-run] [--retry-uncertain] [
 daylog notion disable [--json]
 
 setup 隐藏输入 Token，在目标页下建立一个 Daylog 数据库，每天一页；只有名称、日期、状态三个字段。--database 可指定已有的兼容库。
-Token 只存系统凭据存储，不写入配置、输出或命令历史；脚本请用 --token-stdin 并指定 --page。
+Token 加密保存在 ~/.daylog/integrations/credentials.enc，密钥为同目录 credentials.key；两者权限均限制为当前用户，整个 ~/.daylog 可随备份/迁移移动。旧系统凭据在首次读取时成功迁入加密文件后才删除。脚本请用 --token-stdin 并指定 --page。
 手动 sync 默认今天，显示日期后需要确认；--date 显式指定日期可直接执行，--yes 明确接受默认今天。脚本须使用 --date 或 --yes。
 后台每天本地时间 00:00 同步前一天，开机/联网后补传；需保持 Daylog 后台运行，可用 daylog start --login。
 schedule 设置当天覆盖同步的时间点，按已保存时区执行；--times "" 恢复仅午夜同步。错过多个时间点，恢复后只补一次最新记录。
@@ -38,11 +38,6 @@ schedule 设置当天覆盖同步的时间点，按已保存时区执行；--tim
 活动按时间写在正文。同一天的手动、自动和补齐会更新同一页的 Daylog 活动记录，保留「我的备注」；本地历史缺失时保留较完整的云端记录。
 普通联网失败会自动退避，权限/额度问题需修正后手动 sync 或重新 setup。
 `
-
-type nativeNotionSecrets struct{}
-
-func (nativeNotionSecrets) Set(name, value string) error { return native.SetNamedSecret(name, value) }
-func (nativeNotionSecrets) Get(name string) string       { return native.NamedSecret(name) }
 
 func notionCommand(ctx context.Context, store *journal.Store, args []string) error {
 	if len(args) == 0 {
@@ -146,7 +141,20 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 		if settings.Layout != notion.DailyLayout {
 			message += "\n当前为旧版双库配置，需重新运行 daylog notion setup；已有单页库可用 --database 指定。"
 		}
-		return result(*asJSON, map[string]any{"configured": true, "needs_setup": settings.Layout != notion.DailyLayout, "settings": settings, "sync": state}, message)
+		stored, credentialErr := (credentials.Store{Root: store.Root}).Exists(settings.SecretName())
+		credentialError := ""
+		if credentialErr != nil {
+			credentialError = "无法检查本地加密凭据"
+		}
+		if credentialErr == nil {
+			if stored {
+				message += "\n凭据：~/.daylog/integrations/credentials.enc（本地加密）"
+			} else {
+				message += "\n凭据：尚未迁移到本地加密文件；首次读取时尝试从系统凭据存储迁移"
+			}
+		}
+		credentialFile := filepath.Join(store.Root, "integrations", "credentials.enc")
+		return result(*asJSON, map[string]any{"configured": true, "needs_setup": settings.Layout != notion.DailyLayout, "settings": settings, "sync": state, "credential_storage": "encrypted_file", "credential_file": credentialFile, "credential_stored": stored, "credential_error": credentialError}, message)
 	}
 	if op == "setup" {
 		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
@@ -245,7 +253,7 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 		if preflightErr != nil {
 			return preflightErr
 		}
-		if err = (nativeNotionSecrets{}).Set(proposed.SecretName(), token); err != nil {
+		if err = newIntegrationSecrets(store.Root).Set(proposed.SecretName(), token); err != nil {
 			return err
 		}
 		if err = notion.SaveSettings(store.Root, proposed); err != nil {
@@ -325,7 +333,13 @@ func notionCommand(ctx context.Context, store *journal.Store, args []string) err
 	}
 	var job exports.Job
 	err = withProgress(!*asJSON, label, func() error {
-		token := (nativeNotionSecrets{}).Get(settings.SecretName())
+		token, tokenErr := newIntegrationSecrets(store.Root).Get(settings.SecretName())
+		if errors.Is(tokenErr, credentials.ErrNotFound) {
+			return errors.New("无法读取 Notion 凭证，请重新运行 daylog notion setup")
+		}
+		if tokenErr != nil {
+			return tokenErr
+		}
 		if token == "" {
 			return errors.New("无法读取 Notion 凭证，请检查系统凭据存储或重新运行 daylog notion setup")
 		}

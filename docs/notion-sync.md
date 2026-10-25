@@ -10,7 +10,7 @@
 daylog notion setup
 ```
 
-Token 隐藏输入，只存 macOS 钥匙串或 Windows 凭据管理器，不写入配置或日志，也和 AI Key 分开。脚本使用 `--page <父页链接> --token-stdin` 从受保护的标准输入传递。
+Token 隐藏输入，保存在 `~/.daylog/integrations/credentials.enc`，用同目录的 `credentials.key` 做 AES-256-GCM 加密；目录权限为 `0700`，文件为 `0600`。迁移或备份整个 `~/.daylog` 时必须同时保留 key 与 enc 文件。它与 AI Key 分开处理，不写入配置或日志。旧版 macOS 钥匙串/Windows 凭据管理器条目会在首次读取时迁入加密文件，回读验证成功后才删除旧条目。脚本使用 `--page <父页链接> --token-stdin` 从受保护的标准输入传递。
 
 已有简化数据库时可显式指定，避免重复建库：
 

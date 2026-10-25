@@ -11,7 +11,7 @@ import (
 
 type SecretStore interface {
 	Set(string, string) error
-	Get(string) string
+	Get(string) (string, error)
 }
 type Service struct {
 	Root           string
