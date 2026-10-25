@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func TestNotionStatusReportsPortableCredentialWithoutReadingIt(t *testing.T) {
 	if err = json.Unmarshal(raw, &result); err != nil {
 		t.Fatal(err)
 	}
-	if !result.CredentialStored || result.CredentialStorage != "encrypted_file" || !strings.HasSuffix(result.CredentialFile, "integrations/credentials.enc") {
+	if !result.CredentialStored || result.CredentialStorage != "encrypted_file" || !strings.HasSuffix(result.CredentialFile, filepath.Join("integrations", "credentials.enc")) {
 		t.Fatal("portable credential state missing", string(raw))
 	}
 }
