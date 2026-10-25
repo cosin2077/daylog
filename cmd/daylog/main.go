@@ -21,7 +21,7 @@ import (
 	"daylog/internal/update"
 )
 
-var version = "0.13.0"
+var version = "0.14.0"
 
 const help = `Daylog — 自动记录今天做了什么
 
