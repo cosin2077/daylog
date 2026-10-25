@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -58,5 +59,16 @@ func TestWorkLabelsKeepMissingDistinctFromZero(t *testing.T) {
 	}
 	if workEstimateLabel(journal.WorkTime{Available: true, AwaySeconds: 600}) != "0 秒" {
 		t.Fatal("explicit away time presented as missing")
+	}
+}
+
+func TestStatusSeparatesTaskAndAppOnlyTime(t *testing.T) {
+	var out bytes.Buffer
+	writeWorkStatus(&out, journal.WorkTime{Available: true, EstimatedSeconds: 4800, ClassifiedSeconds: 900, AppAttributedSeconds: 2700, UnclassifiedSeconds: 3900, OtherUnclassifiedSeconds: 1200})
+	text := out.String()
+	for _, want := range []string{"今天工作", "已归类 15 分", "仅应用 45 分", "其他 20 分"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status lost %q: %s", want, text)
+		}
 	}
 }

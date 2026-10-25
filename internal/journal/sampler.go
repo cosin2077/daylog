@@ -117,6 +117,21 @@ func SelectKeyFrames(frames []Frame, target, limit int) []Frame {
 	if boundary+2 > n {
 		n = boundary + 2
 	}
+	// A stable batch needs only temporal coverage. Named content changes add a
+	// small bounded budget so the model can distinguish tasks within one app;
+	// call count is unchanged and the configured maximum remains authoritative.
+	meaningful := 0
+	for _, f := range frames {
+		if f.Change >= 0.02 {
+			meaningful++
+		}
+	}
+	if meaningful >= 2 && n < limit {
+		n++
+	}
+	if meaningful >= 5 && n < limit {
+		n++
+	}
 	if n > limit {
 		n = limit
 	}
@@ -141,7 +156,7 @@ func SelectKeyFrames(frames []Frame, target, limit int) []Frame {
 					distance = d
 				}
 			}
-			priority := distance/float64(len(frames)) + math.Min(f.Change, 1)*0.25
+			priority := distance/float64(len(frames)) + math.Min(f.Change, 1)*0.4
 			if i > 0 && frames[i-1].App != f.App {
 				priority += 2
 			}

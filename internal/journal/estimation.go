@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const estimationVersion = "bounded_neighbors_v4"
+const estimationVersion = "bounded_neighbors_v5"
 
 // Estimate only inside adjacent, bounded observations. Inferred spans are kept
 // separate from continuous observation evidence and never extend beyond a pair.
@@ -36,7 +36,7 @@ func estimateReport(input Report) Report {
 		}
 		if hasLow {
 			for i := range observations {
-				if observations[i].State == "sampled" && observations[i].TaskID == "" {
+				if observations[i].State == "sampled" && observations[i].TaskID == "" && !observations[i].Unselected {
 					observations[i].State = "uncertain"
 				}
 			}
@@ -138,6 +138,52 @@ func estimateReport(input Report) Report {
 			add(right, middle, b.At)
 		}
 	}
+	// Selected, identified anchors can support a bounded estimate across images
+	// intentionally omitted from model input. An unidentified selected image is
+	// a semantic boundary, not permission to extend its neighbor's task.
+	anchor := -1
+	for i, p := range points {
+		right := cardAt(p)
+		if p.State != "sampled" || right < 0 {
+			continue
+		}
+		if anchor >= 0 && i > anchor+1 && p.At.Sub(points[anchor].At) <= 3*time.Minute {
+			a := points[anchor]
+			left := cardAt(a)
+			valid := left >= 0 && a.App != "" && p.App != ""
+			boundary := a.At.Add(p.At.Sub(a.At) / 2)
+			transitioned, activated := false, false
+			for j := anchor + 1; valid && j <= i; j++ {
+				event := points[j]
+				valid = neighborGap(points[j-1], event)
+				if j < i {
+					valid = valid && (event.State == "active" || event.State == "sampled" && event.Unselected && event.TaskID == "")
+				}
+				if event.App != a.App && event.App != p.App {
+					valid = false
+				}
+				if a.App != p.App {
+					if event.App == p.App {
+						transitioned = true
+						if event.State == "active" && !activated {
+							boundary, activated = event.At, true
+						}
+					} else if transitioned {
+						valid = false
+					}
+				}
+			}
+			if valid {
+				if left == right {
+					add(left, a.At, p.At)
+				} else {
+					add(left, a.At, boundary)
+					add(right, boundary, p.At)
+				}
+			}
+		}
+		anchor = i
+	}
 	r.EstimationVersion = estimationVersion
 	for i := range r.Cards {
 		c := &r.Cards[i]
@@ -204,6 +250,7 @@ func uniqueObservations(input []TaskObservation) []TaskObservation {
 		if last.TaskID != p.TaskID || last.App != p.App || last.State != p.State || (last.ActivityID != "" && p.ActivityID != "" && last.ActivityID != p.ActivityID) {
 			last.TaskID, last.State, last.ActivityID = "", "conflict", ""
 		}
+		last.Unselected = last.Unselected && p.Unselected
 		last.MaxGapSeconds = min(last.MaxGapSeconds, p.MaxGapSeconds)
 	}
 	return result

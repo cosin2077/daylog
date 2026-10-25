@@ -14,13 +14,26 @@ import (
 // WorkTime separates evidence of computer activity from knowledge of its task.
 // All durations remain estimates; missing samples never prove absence.
 type WorkTime struct {
-	Available           bool       `json:"available"`
-	EstimatedSeconds    int64      `json:"estimated_seconds"`
-	ClassifiedSeconds   int64      `json:"classified_seconds"`
-	UnclassifiedSeconds int64      `json:"unclassified_seconds"`
-	AwaySeconds         int64      `json:"away_seconds"`
-	MissingSeconds      int64      `json:"missing_seconds"`
-	UnclassifiedSpans   []TimeSpan `json:"unclassified_spans,omitempty"`
+	Available                bool       `json:"available"`
+	EstimatedSeconds         int64      `json:"estimated_seconds"`
+	ClassifiedSeconds        int64      `json:"classified_seconds"`
+	AppAttributedSeconds     int64      `json:"app_attributed_seconds"`
+	UnclassifiedSeconds      int64      `json:"unclassified_seconds"`
+	OtherUnclassifiedSeconds int64      `json:"other_unclassified_seconds"`
+	AwaySeconds              int64      `json:"away_seconds"`
+	MissingSeconds           int64      `json:"missing_seconds"`
+	AppSpans                 []AppSpan  `json:"app_spans,omitempty"`
+	UnclassifiedSpans        []TimeSpan `json:"unclassified_spans,omitempty"`
+	OtherUnclassifiedSpans   []TimeSpan `json:"other_unclassified_spans,omitempty"`
+}
+
+// AppSpan is observed foreground activity whose specific task is unknown.
+// It is not a claim about what the user was doing inside that application.
+type AppSpan struct {
+	App   string    `json:"app"`
+	Name  string    `json:"name"`
+	Start time.Time `json:"start"`
+	End   time.Time `json:"end"`
 }
 
 type workPoint struct {
@@ -29,6 +42,7 @@ type workPoint struct {
 	gap   int
 	cut   bool
 	raw   bool
+	app   string
 }
 
 type workLedger struct {
@@ -37,6 +51,7 @@ type workLedger struct {
 	away    []span
 	gaps    []span
 	blocked []span
+	apps    []AppSpan
 	windows []span
 }
 
@@ -57,7 +72,7 @@ func newWorkLedger(reports []Report, pending []Batch, draft Batch, observations 
 		}
 		var stream []workPoint
 		for _, p := range r.TaskObservations {
-			stream = append(stream, workPoint{p.At, p.State, p.MaxGapSeconds, p.State == "missing", false})
+			stream = append(stream, workPoint{p.At, p.State, p.MaxGapSeconds, p.State == "missing", false, p.App})
 		}
 		l.addStream(stream)
 	}
@@ -71,14 +86,14 @@ func newWorkLedger(reports []Report, pending []Batch, draft Batch, observations 
 			if gap == 0 {
 				gap = b.MaxGapSeconds
 			}
-			stream = append(stream, workPoint{p.At, p.State, gap, p.State == "missing", false})
+			stream = append(stream, workPoint{p.At, p.State, gap, p.State == "missing", false, p.App})
 		}
 		l.addStream(stream)
 	}
 	// Raw events come last, preserving their observed state at a shared instant.
 	var raw []workPoint
 	for _, p := range observations {
-		raw = append(raw, workPoint{p.At, p.State, p.MaxGapSeconds, p.State == "missing", true})
+		raw = append(raw, workPoint{p.At, p.State, p.MaxGapSeconds, p.State == "missing", true, p.App})
 	}
 	l.addStream(raw)
 	sort.SliceStable(l.points, func(i, j int) bool { return l.points[i].at.Before(l.points[j].at) })
@@ -97,10 +112,13 @@ func newWorkLedger(reports []Report, pending []Batch, draft Batch, observations 
 			case p.raw:
 				// The actual ordered log wins over a projected report boundary.
 			case previous.raw:
-				p.state, p.cut, p.raw = previous.state, previous.cut, true
+				p.state, p.cut, p.raw, p.app = previous.state, previous.cut, true, previous.app
 			default:
 				p.state = conservativeWorkState(previous.state, p.state)
 				p.cut = p.cut || previous.cut
+				if p.app == "" {
+					p.app = previous.app
+				}
 			}
 			points[len(points)-1] = p
 		} else {
@@ -117,6 +135,9 @@ func newWorkLedger(reports []Report, pending []Batch, draft Batch, observations 
 			l.away = append(l.away, part)
 		case workingState(a.state) && !b.cut && b.at.Sub(a.at) <= time.Duration(min(a.gap, b.gap))*time.Second:
 			l.work = append(l.work, part)
+			if a.app != "" {
+				l.apps = append(l.apps, AppSpan{App: a.app, Name: displayApp(a.app), Start: a.at, End: b.at})
+			}
 		default:
 			l.gaps = append(l.gaps, part)
 			if b.cut || !workingState(a.state) && a.state != "" {
@@ -128,6 +149,7 @@ func newWorkLedger(reports []Report, pending []Batch, draft Batch, observations 
 	l.away = mergedWorkSpans(l.away)
 	l.gaps = mergedWorkSpans(l.gaps)
 	l.blocked = mergedWorkSpans(l.blocked)
+	l.apps = mergeAppSpans(l.apps)
 	l.windows = mergedWorkSpans(l.windows)
 	return l
 }
@@ -228,6 +250,22 @@ func (l *workLedger) summary(start, end time.Time, classified []span) WorkTime {
 			result.UnclassifiedSpans = append(result.UnclassifiedSpans, unknown)
 		}
 	}
+	appOnly := appOnlySpans(clippedAppSpans(l.apps, start, end), taskSpans, excluded)
+	for i := range appOnly {
+		appOnly[i].Start = appOnly[i].Start.In(start.Location())
+		appOnly[i].End = appOnly[i].End.In(start.Location())
+	}
+	result.AppSpans = appOnly
+	result.AppAttributedSeconds = covered(appSpansToSpans(appOnly))
+	if result.AppAttributedSeconds > result.UnclassifiedSeconds {
+		result.AppAttributedSeconds = result.UnclassifiedSeconds
+	}
+	result.OtherUnclassifiedSeconds = result.UnclassifiedSeconds - result.AppAttributedSeconds
+	for _, p := range result.UnclassifiedSpans {
+		for _, other := range subtractSpans(p.Start, p.End, appSpansToTimeSpans(appOnly)) {
+			result.OtherUnclassifiedSpans = append(result.OtherUnclassifiedSpans, other)
+		}
+	}
 	var accounted []TimeSpan
 	for _, p := range append(append([]span(nil), work...), away...) {
 		accounted = append(accounted, TimeSpan{Start: p.start, End: p.end})
@@ -241,6 +279,65 @@ func (l *workLedger) summary(start, end time.Time, classified []span) WorkTime {
 	result.MissingSeconds = covered(missing)
 	result.Available = result.Available || result.MissingSeconds > 0
 	return result
+}
+
+func mergeAppSpans(input []AppSpan) []AppSpan {
+	input = append([]AppSpan(nil), input...)
+	sort.Slice(input, func(i, j int) bool { return input[i].Start.Before(input[j].Start) })
+	var out []AppSpan
+	for _, p := range input {
+		if !p.End.After(p.Start) {
+			continue
+		}
+		if len(out) > 0 && out[len(out)-1].App == p.App && !p.Start.After(out[len(out)-1].End) {
+			if p.End.After(out[len(out)-1].End) {
+				out[len(out)-1].End = p.End
+			}
+		} else {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+func clippedAppSpans(input []AppSpan, start, end time.Time) []AppSpan {
+	var out []AppSpan
+	for _, p := range input {
+		if p.Start.Before(start) {
+			p.Start = start
+		}
+		if p.End.After(end) {
+			p.End = end
+		}
+		if p.End.After(p.Start) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+func appSpansToSpans(input []AppSpan) []span {
+	out := make([]span, 0, len(input))
+	for _, p := range input {
+		out = append(out, span{p.Start, p.End})
+	}
+	return out
+}
+func appSpansToTimeSpans(input []AppSpan) []TimeSpan {
+	out := make([]TimeSpan, 0, len(input))
+	for _, p := range input {
+		out = append(out, TimeSpan{Start: p.Start, End: p.End})
+	}
+	return out
+}
+func appOnlySpans(input []AppSpan, tasks, excluded []TimeSpan) []AppSpan {
+	var out []AppSpan
+	for _, p := range input {
+		for _, left := range subtractSpans(p.Start, p.End, excluded) {
+			for _, part := range subtractSpans(left.Start, left.End, tasks) {
+				out = append(out, AppSpan{App: p.App, Name: p.Name, Start: part.Start, End: part.End})
+			}
+		}
+	}
+	return mergeAppSpans(out)
 }
 
 // ReportWorkTime uses only committed sources, suitable for durable exports.

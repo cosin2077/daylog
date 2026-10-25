@@ -3,6 +3,7 @@ package journal
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -193,6 +194,32 @@ func TestKeyframesKeepBriefAppAndCaps(t *testing.T) {
 	}
 	if len(SelectKeyFrames(frames, 4, 1)) != 1 {
 		t.Fatal("hard image cap bypassed")
+	}
+}
+
+func TestKeyframesAddBoundedCoverageForContentChanges(t *testing.T) {
+	var stable, changing []Frame
+	for i := 0; i < 20; i++ {
+		stable = append(stable, Frame{ID: fmt.Sprintf("s%d", i), App: "editor", Change: 0.001})
+		change := 0.001
+		if i%4 == 2 {
+			change = 0.1
+		}
+		changing = append(changing, Frame{ID: fmt.Sprintf("c%d", i), App: "editor", Change: change})
+	}
+	steady := SelectKeyFrames(stable, 4, 8)
+	dynamic := SelectKeyFrames(changing, 4, 8)
+	if len(steady) != 4 || len(dynamic) != 6 {
+		t.Fatal("dynamic content did not receive a bounded extra keyframe budget", len(steady), len(dynamic))
+	}
+	peaks := 0
+	for _, f := range dynamic {
+		if f.Change >= 0.1 {
+			peaks++
+		}
+	}
+	if peaks < 3 {
+		t.Fatal("visual content changes were not represented", dynamic)
 	}
 }
 

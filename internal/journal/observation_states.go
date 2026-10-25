@@ -23,6 +23,10 @@ func (s *Store) observationStates(r Report) Report {
 	points := append([]TaskObservation(nil), r.TaskObservations...)
 	labels := map[string]string{}
 	activities := map[string]string{}
+	selected := map[string]bool{}
+	for _, f := range b.Frames {
+		selected[f.ID] = true
+	}
 	for _, card := range r.Cards {
 		for _, id := range card.Evidence {
 			labels[id] = card.TaskID
@@ -67,6 +71,7 @@ func (s *Store) observationStates(r Report) Report {
 		for i := range points {
 			if (points[i].State == "" || points[i].State == "sampled") && points[i].At.Equal(o.At) && o.State == "sampled" && points[i].App == o.App {
 				points[i].State = o.State
+				points[i].Unselected = o.FrameID != "" && !selected[o.FrameID]
 				if points[i].ActivityID == "" {
 					points[i].ActivityID = activities[o.FrameID]
 				}

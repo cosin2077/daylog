@@ -292,6 +292,8 @@ func deriveReport(b Batch, in Interpretation, model string) (Report, error) {
 			// Preserve app activation as timing information. Without a picture
 			// it does not identify a task; availability gaps remain distinct.
 			point := TaskObservation{At: o.At, App: o.App, State: o.State, MaxGapSeconds: b.MaxGapSeconds}
+			_, selected := frames[o.FrameID]
+			point.Unselected = o.State == "sampled" && o.FrameID != "" && !selected
 			if label := labels[i]; label >= 0 {
 				point.TaskID = r.Cards[label].TaskID
 				point.ActivityID = r.Cards[label].ActivityID

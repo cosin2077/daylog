@@ -311,6 +311,6 @@ func workEstimateLabel(w journal.WorkTime) string {
 func writeWorkStatus(w io.Writer, timing journal.WorkTime) {
 	fmt.Fprintln(w, "  今天工作  "+workEstimateLabel(timing))
 	if timing.Available {
-		fmt.Fprintf(w, "  其中      已归类 %s · 未归类 %s\n", workDuration(timing.ClassifiedSeconds), workDuration(timing.UnclassifiedSeconds))
+		fmt.Fprintf(w, "  其中      已归类 %s · 仅应用 %s · 其他 %s\n", workDuration(timing.ClassifiedSeconds), workDuration(timing.AppAttributedSeconds), workDuration(timing.OtherUnclassifiedSeconds))
 	}
 }

@@ -176,7 +176,7 @@ type FragmentSource struct {
 
 func displayApp(app string) string {
 	name := filepath.Base(app)
-	known := map[string]string{"com.tencent.xinwechat": "微信", "wechat.exe": "微信", "weixin.exe": "微信", "com.tencent.weworkmac": "企业微信", "wxwork.exe": "企业微信", "org.telegram.desktop": "Telegram", "ru.keepcoder.telegram": "Telegram", "com.hnc.discord": "Discord", "com.apple.terminal": "终端", "com.apple.ical": "日历", "com.apple.finder": "访达", "com.apple.notes": "备忘录", "com.todesktop.230313mzl4w4u92": "Cursor", "com.microsoft.teams2": "Teams", "telegram.exe": "Telegram", "com.google.chrome": "Chrome", "chrome.exe": "Chrome", "com.apple.safari": "Safari", "com.microsoft.edgemac": "Edge", "msedge.exe": "Edge", "com.microsoft.vscode": "VS Code", "code.exe": "VS Code", "com.openai.chat": "ChatGPT"}
+	known := map[string]string{"com.tencent.xinwechat": "微信", "wechat.exe": "微信", "weixin.exe": "微信", "com.tencent.weworkmac": "企业微信", "wxwork.exe": "企业微信", "org.telegram.desktop": "Telegram", "ru.keepcoder.telegram": "Telegram", "com.hnc.discord": "Discord", "com.apple.terminal": "终端", "com.apple.ical": "日历", "com.apple.finder": "访达", "com.apple.notes": "备忘录", "com.todesktop.230313mzl4w4u92": "Cursor", "com.microsoft.teams2": "Teams", "telegram.exe": "Telegram", "com.google.chrome": "Chrome", "chrome.exe": "Chrome", "com.apple.safari": "Safari", "com.microsoft.edgemac": "Edge", "msedge.exe": "Edge", "com.microsoft.vscode": "VS Code", "code.exe": "VS Code", "com.openai.chat": "ChatGPT", "com.openai.codex": "Codex", "com.googlecode.iterm2": "iTerm2", "sh.paseo.desktop": "Paseo"}
 	if v := known[strings.ToLower(name)]; v != "" {
 		return v
 	}

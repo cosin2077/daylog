@@ -40,7 +40,7 @@ func todayCommand(s *journal.Store, args []string) error {
 	}
 	fmt.Print("\n\n")
 	if view.WorkTime.Available {
-		fmt.Printf("电脑工作%s · 已归类 %s · 未归类 %s\n\n", workEstimateLabel(view.WorkTime), workDuration(view.WorkTime.ClassifiedSeconds), workDuration(view.WorkTime.UnclassifiedSeconds))
+		fmt.Printf("电脑工作%s · 已归类 %s · 仅应用 %s · 其他 %s\n\n", workEstimateLabel(view.WorkTime), workDuration(view.WorkTime.ClassifiedSeconds), workDuration(view.WorkTime.AppAttributedSeconds), workDuration(view.WorkTime.OtherUnclassifiedSeconds))
 		if *explain {
 			fmt.Printf("未工作 %s；采集不足 %s。未归类时间已包含在电脑工作估时中，不自动分配到具体任务。\n", workDuration(view.WorkTime.AwaySeconds), workDuration(view.WorkTime.MissingSeconds))
 		}

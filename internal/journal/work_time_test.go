@@ -250,6 +250,49 @@ func TestIdleDeadlineDoesNotReorderRecordedPauseBoundary(t *testing.T) {
 	}
 }
 
+func TestUnselectedImagesAllowOnlyBoundedTaskEstimate(t *testing.T) {
+	at := time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
+	r := Report{SchemaVersion: 2, AppSource: "window_server", Start: at, End: at.Add(90 * time.Second), BatchID: ID(at), UnknownSeconds: 90, UnknownSpans: []TimeSpan{{Start: at, End: at.Add(90 * time.Second)}}, Cards: []Card{{TaskID: "a", Title: "合成任务", Confidence: "medium", Start: at, End: at, Spans: []TimeSpan{{Start: at, End: at}}}},
+		TaskObservations: []TaskObservation{{At: at, State: "sampled", App: "editor", TaskID: "a", MaxGapSeconds: 120}, {At: at.Add(45 * time.Second), State: "sampled", App: "editor", Unselected: true, MaxGapSeconds: 120}, {At: at.Add(90 * time.Second), State: "sampled", App: "editor", TaskID: "a", MaxGapSeconds: 120}}}
+	result := estimateReport(r)
+	if len(result.Cards) != 1 || result.Cards[0].EstimatedSeconds != 90 || result.UnknownSeconds != 0 {
+		t.Fatal("unselected frames between identical bounded tasks did not preserve inferred time", result.Cards, result.UnknownSeconds)
+	}
+	r.TaskObservations[1].Unselected = false
+	blocked := estimateReport(r)
+	if blocked.Cards[0].EstimatedSeconds != 45 {
+		t.Fatal("selected unidentified image was crossed as inferred continuity", blocked.Cards[0])
+	}
+	r.TaskObservations[1].At = at.Add(3*time.Minute + time.Second)
+	r.End = r.TaskObservations[1].At.Add(time.Minute)
+	r.UnknownSpans = []TimeSpan{{Start: at, End: r.End}}
+	r.TaskObservations[2].At = r.End
+	far := estimateReport(r)
+	if far.Cards[0].EstimatedSeconds > 60 {
+		t.Fatal("task estimate crossed a long missing interval", far.Cards[0])
+	}
+}
+
+func TestWorkTimeAttributesUnknownTaskToObservedApplication(t *testing.T) {
+	at := time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
+	obs := []Observation{{At: at, State: "active", App: "com.microsoft.vscode"}, {At: at.Add(30 * time.Second), State: "sampled", App: "com.microsoft.vscode"}, {At: at.Add(60 * time.Second), State: "active", App: "com.google.chrome"}, {At: at.Add(120 * time.Second), State: "sampled", App: "com.google.chrome"}, {At: at.Add(150 * time.Second), State: "active", App: "com.apple.finder"}, {At: at.Add(180 * time.Second), State: "sampled", App: "com.apple.finder"}, {At: at.Add(210 * time.Second), State: "active", App: ""}, {At: at.Add(240 * time.Second), State: "sampled", App: ""}}
+	ledger := newWorkLedger(nil, nil, Batch{}, obs)
+	tasks := []span{{at, at.Add(60 * time.Second)}}
+	w := ledger.summary(at, at.Add(4*time.Minute), tasks)
+	if w.EstimatedSeconds != 240 || w.ClassifiedSeconds != 60 || w.AppAttributedSeconds != 150 || w.OtherUnclassifiedSeconds != 30 || w.UnclassifiedSeconds != 180 {
+		t.Fatal("app evidence was dropped or double counted", w)
+	}
+	if len(w.AppSpans) != 2 || w.AppSpans[0].Name != "Chrome" || w.AppSpans[1].Name != "访达" {
+		t.Fatal("app attribution is not human-readable", w.AppSpans)
+	}
+	if w.AppSpans[0].Start.Location() != at.Location() {
+		t.Fatal("app spans use a different timezone than the report", w.AppSpans[0])
+	}
+	if len(w.OtherUnclassifiedSpans) != 1 || !w.OtherUnclassifiedSpans[0].Start.Equal(at.Add(210*time.Second)) {
+		t.Fatal("unattributed residual time was lost", w.OtherUnclassifiedSpans)
+	}
+}
+
 func TestTimingReaderIgnoresOnlyIncompleteTail(t *testing.T) {
 	s := testStore(t)
 	at := time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)
