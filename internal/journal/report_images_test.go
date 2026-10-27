@@ -234,7 +234,14 @@ func TestRenderHTMLEmbedsImagesSafely(t *testing.T) {
 	if strings.Count(html, "</script>") != 2 { // the JSON block and the inline script
 		t.Fatalf("unexpected </script> count %d", strings.Count(html, "</script>"))
 	}
-	if !strings.Contains(html, "img-src data:") || strings.Contains(html, "unsafe-eval") || regexp.MustCompile(`(?i)(src|href)="https?:`).MatchString(html) {
+	// The only remote URL allowed is the project link in the header: a plain navigation
+	// (new tab, no referrer, no report data in the URL), never a loaded resource.
+	const projectLink = `<a class="gh-link" id="gh-link" href="https://github.com/cosin2077/daylog" target="_blank" rel="noopener noreferrer"`
+	if strings.Count(html, projectLink) != 1 {
+		t.Fatal("project link missing or changed")
+	}
+	local := strings.Replace(html, projectLink, "", 1)
+	if !strings.Contains(html, "img-src data:") || strings.Contains(html, "unsafe-eval") || regexp.MustCompile(`(?i)(src|href)="https?:`).MatchString(local) {
 		t.Fatal("CSP or remote resource policy changed")
 	}
 	match := regexp.MustCompile(`(?s)<script type="application/json" id="report-data">(.*?)</script>`).FindSubmatch(data)
@@ -248,7 +255,7 @@ func TestRenderHTMLEmbedsImagesSafely(t *testing.T) {
 	if decoded.Images == nil || len(decoded.Images.Frames) != 3 || decoded.Images.Frames[0].App != o.Images.Frames[0].App {
 		t.Fatal("embedded frames lost in the payload")
 	}
-	for _, id := range []string{`id="peek"`, `id="lightbox"`, `id="rhythm-chart"`} {
+	for _, id := range []string{`id="peek"`, `id="lightbox"`, `id="rhythm-chart"`, `id="share"`, `id="share-canvas"`, `rel="icon"`} {
 		if !strings.Contains(html, id) {
 			t.Fatalf("report markup lacks %s", id)
 		}

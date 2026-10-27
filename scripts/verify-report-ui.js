@@ -120,8 +120,63 @@ async (page) => {
     assert(await page.locator('#rhythm-details').evaluate(n => !n.open), 'Print did not restore collapsed state');
     results.push('UX-3 keyboard/click disclosure, ordinary/inferred/single-frame text, complete mark coverage and print restoration');
 
+
+    // Header: project link is a plain new-tab navigation that carries no report data.
+    const gh = await page.locator('#gh-link').evaluate(a => ({ href: a.getAttribute('href'), rel: a.rel, target: a.target, label: a.getAttribute('aria-label') }));
+    assert(gh.href === 'https://github.com/cosin2077/daylog' && gh.rel === 'noopener noreferrer' && gh.target === '_blank' && gh.label, 'GitHub link changed: ' + JSON.stringify(gh));
+    assert(await page.locator('link[rel=icon]').evaluate(n => n.getAttribute('href').startsWith('data:image/svg+xml')), 'Favicon must be an inline data URI');
+    // Share card: spy on canvas text to prove the default card has no task titles or app names.
+    await page.evaluate(() => { window.__drawn = []; const f = CanvasRenderingContext2D.prototype.fillText; CanvasRenderingContext2D.prototype.fillText = function (t, ...r) { window.__drawn.push(String(t)); return f.call(this, t, ...r); }; });
+    const shareReady = () => page.waitForFunction(() => !document.getElementById('share-save').disabled);
+    await page.locator('#share-btn').click();
+    await shareReady();
+    assert(await page.locator('#share-close').evaluate(n => n === document.activeElement), 'Share dialog did not take focus');
+    assert(await page.locator('#share-titles').getAttribute('aria-checked') === 'false' && await page.locator('#share-shots').getAttribute('aria-checked') === 'false', 'Share opt-ins must default to off');
+    const secret = synthetic.views.find(v => v.period === 'day');
+    const titles = [...new Set([...(secret.activities || []).map(a => a.title), ...(secret.tasks || []).map(t => t.title)].filter(t => t && t.length > 3))];
+    const appNames = [...new Set((secret.work_time.app_spans || []).map(s => s.name).filter(n => n && n.length > 2))];
+    const drawnDefault = await page.evaluate(() => window.__drawn.join('\n'));
+    assert(drawnDefault.includes('github.com/cosin2077/daylog'), 'Share card footer missing');
+    assert(!titles.some(t => drawnDefault.includes(t.slice(0, 8))), 'Default share card drew a task title');
+    assert(!appNames.some(n => drawnDefault.includes(n)), 'Default share card drew an app name');
+    const canvasInfo = () => page.locator('#share-canvas').evaluate(c => new Promise(res => { const x = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let ink = 0; for (let i = 0; i < x.length; i += 4 * 97) if (x[i] < 200) ink++; c.toBlob(b => res({ w: c.width, h: c.height, size: b ? b.size : 0, ink, url: c.toDataURL().length })); }));
+    const plain = await canvasInfo();
+    assert(plain.w === 1080 && plain.h > 900 && plain.size > 20000 && plain.ink > 500, 'Share image blank or wrong size: ' + JSON.stringify(plain));
+    const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#share-save').click()]);
+    assert(/^daylog-\d{4}-\d\d-\d\d\.png$/.test(download.suggestedFilename()), 'Unexpected share file name ' + download.suggestedFilename());
+    await page.evaluate(() => { window.__copied = null; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { write: async items => { window.__copied = items[0].types; } } }); });
+    await page.locator('#share-copy').click();
+    await page.waitForFunction(() => window.__copied);
+    assert((await page.evaluate(() => window.__copied)).includes('image/png'), 'Copy did not write a PNG');
+    await page.evaluate(() => { window.__drawn = []; });
+    await page.locator('#share-titles').click();
+    await page.locator('#share-shots').click();
+    await shareReady();
+    await page.waitForFunction(() => document.getElementById('share-meta').textContent.includes('×'));
+    const optIn = await canvasInfo();
+    assert(optIn.h > plain.h && optIn.size > plain.size, 'Opt-in titles/screenshots not drawn: ' + JSON.stringify(optIn));
+    const drawnOptIn = await page.evaluate(() => window.__drawn.join('\n'));
+    assert(titles.some(t => drawnOptIn.includes(t.slice(0, 6))), 'Title opt-in did not draw any title');
+    for (let i = 0; i < 12; i++) await page.keyboard.press('Tab');
+    assert(await page.evaluate(() => document.getElementById('share').contains(document.activeElement)), 'Focus escaped the share dialog');
+    await page.keyboard.press('Escape');
+    assert(await page.locator('#share').isHidden() && await page.locator('#share-btn').evaluate(n => n === document.activeElement), 'Esc did not close share or restore focus');
+    await page.locator('#share-btn').click();
+    await shareReady();
+    assert(await page.locator('#share-titles').getAttribute('aria-checked') === 'false', 'Opt-ins persisted across openings');
+    await page.locator('#share-close').click();
+    results.push('GitHub link and favicon, share dialog focus/Esc, PNG size and no taint, download name, copy, privacy defaults (no titles/app names drawn), opt-ins');
+
     for (const width of [375, 320]) {
       await page.setViewportSize({ width, height: 812 });
+      const bar = await page.evaluate(() => { const t = document.querySelector('.topbar').getBoundingClientRect(); return { h: t.height, right: Math.max(...[...document.querySelectorAll('.topbar *')].filter(n => n.getClientRects().length).map(n => n.getBoundingClientRect().right)), vw: innerWidth }; });
+      assert(bar.h <= 50 && bar.right <= bar.vw - 8, 'Top bar wraps or overflows at ' + width + ': ' + JSON.stringify(bar));
+      await page.locator('#share-btn').click();
+      await page.waitForFunction(() => !document.getElementById('share-save').disabled);
+      await page.waitForTimeout(300); // let the open animation settle before measuring
+      const sheet = await page.evaluate(() => ({ w: document.querySelector('.share-dlg').getBoundingClientRect().width, vw: innerWidth, sw: document.documentElement.scrollWidth, btn: Math.min(...[...document.querySelectorAll('.share-actions button:not([hidden]),#share-close')].map(b => b.getBoundingClientRect().height)) }));
+      assert(sheet.w === sheet.vw && sheet.sw <= sheet.vw && sheet.btn >= 44, 'Share sheet not full-width or targets too small: ' + JSON.stringify(sheet));
+      await page.keyboard.press('Escape');
       await disclosure.click();
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Timeline overflows mobile viewport');
       await disclosure.click();
@@ -153,7 +208,7 @@ async (page) => {
     }
     results.push('Synthetic range regeneration boundaries and dated timeline descriptions');
     assert(errors.length === 0, errors.join('\n'));
-    results.push('375px/320px layout and no page errors');
+    results.push('375px/320px layout, single-row top bar, full-width share sheet and no page errors');
     return { passed: results, clipboard: 'mocked; no real retry/command executed' };
   } finally {
     await page.emulateMedia({ media: 'screen' });
