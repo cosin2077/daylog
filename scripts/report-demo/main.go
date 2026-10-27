@@ -35,7 +35,8 @@ func main() {
 	var reports []journal.Report
 	for day := -45; day <= 0; day++ {
 		date := anchor.AddDate(0, 0, day)
-		if date.Weekday() == time.Sunday || day == -8 {
+		// Keep the day before the anchor so day-over-day comparisons stay realistic.
+		if (date.Weekday() == time.Sunday && day != -1) || day == -8 {
 			continue
 		}
 		for i := 0; i < 6; i++ {
