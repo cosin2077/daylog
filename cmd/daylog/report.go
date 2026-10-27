@@ -18,12 +18,15 @@ const reportHelp = `Daylog — 可视化报告
   daylog report --period month         默认展示本月
   daylog report --date 2026-10-13       查看指定日期所在的日／周／月
   daylog report --no-open              生成 HTML，输出路径而不打开浏览器
+  daylog report --no-images            不嵌入截图（便于分享；默认嵌入所选日期的缩略截图）
   daylog report --period week --json   输出结构化周报供 Agent 使用
 
   daylog report --from 2026-10-13T14:00:00+08:00 --to 2026-10-13T16:00:00+08:00 [--json]
 
 报告复用已分析的记录，不触发新的模型请求。
 HTML 保存在 ~/.daylog/reports/report.html，每次生成替换上次快照。
+默认在 HTML 中嵌入所选日期（或所选时段）的缩略截图，悬停时间轴可预览、点击放大；
+截图总量有上限，超出部分不嵌入。含截图的 HTML 是私有明文文件，分享前请使用 --no-images。
 `
 
 func reportCommand(ctx context.Context, s *journal.Store, args []string) error {
@@ -34,6 +37,7 @@ func reportCommand(ctx context.Context, s *journal.Store, args []string) error {
 	from := f.String("from", "", "range start, RFC3339 with timezone")
 	to := f.String("to", "", "range end, RFC3339 with timezone")
 	asJSON := f.Bool("json", false, "output structured period summary instead of HTML")
+	noImages := f.Bool("no-images", false, "do not embed screenshots in the HTML report")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
@@ -62,7 +66,7 @@ func reportCommand(ctx context.Context, s *journal.Store, args []string) error {
 		if *asJSON {
 			return output(overview.Views[0])
 		}
-		return presentOverview(ctx, s, overview, "range", *noOpen)
+		return presentOverview(ctx, s, overview, "range", *noOpen, imageWindow{start.In(time.Local), end.In(time.Local), *noImages})
 	}
 	anchor, err := time.ParseInLocation("2006-01-02", *date, time.Local)
 	if err != nil {
@@ -82,10 +86,16 @@ func reportCommand(ctx context.Context, s *journal.Store, args []string) error {
 			}
 		}
 	}
-	return presentOverview(ctx, s, overview, *period, *noOpen)
+	return presentOverview(ctx, s, overview, *period, *noOpen, imageWindow{anchor, anchor.AddDate(0, 0, 1), *noImages})
 }
 
-func presentOverview(ctx context.Context, s *journal.Store, overview journal.Overview, period string, noOpen bool) error {
+// imageWindow selects which screenshots the HTML snapshot embeds.
+type imageWindow struct {
+	start, end time.Time
+	disabled   bool
+}
+
+func presentOverview(ctx context.Context, s *journal.Store, overview journal.Overview, period string, noOpen bool, images imageWindow) error {
 	for _, view := range overview.Views {
 		if view.Period == period && len(view.Activities) == 0 && view.PendingBatches == 0 && view.DraftFrames == 0 && view.AnalyzedBatches == 0 && view.UnknownSeconds == 0 && !view.WorkTime.Available {
 			fmt.Printf("%s 没有记录。\n", view.Anchor)
@@ -94,6 +104,11 @@ func presentOverview(ctx context.Context, s *journal.Store, overview journal.Ove
 			}
 			return nil
 		}
+	}
+	opt := journal.DefaultImageOptions()
+	opt.Disabled = images.disabled
+	if err := s.AttachReportImages(&overview, images.start, images.end, opt); err != nil {
+		return err
 	}
 	path, err := s.WriteHTML(overview, period)
 	if err != nil {

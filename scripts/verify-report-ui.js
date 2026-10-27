@@ -9,6 +9,9 @@ async (page) => {
   const onError = error => errors.push(error.message);
   page.on('pageerror', onError);
   const results = [];
+  // Category filter is a custom listbox: open the button, pick the option by value.
+  const pickCategory = async value => { await page.locator('#category-button').click(); await page.locator(`#category-list [role=option][data-value="${value}"]`).click(); };
+  const category = () => page.locator('#category-filter').getAttribute('data-value');
   try {
     await page.goto(reportURL);
     assert(await page.locator('#report-data').evaluate(n => JSON.parse(n.textContent).sample === true), 'Only synthetic fixtures may be tested');
@@ -18,13 +21,15 @@ async (page) => {
     assert(daily.work_time.estimated_seconds > daily.estimated_seconds, 'Fixture has no unclassified computer activity');
     assert(daily.work_time.classified_seconds + daily.work_time.app_attributed_seconds + daily.work_time.other_unclassified_seconds === daily.work_time.estimated_seconds, 'Work breakdown does not add up');
     assert((await page.locator('#work-label').innerText()) === '电脑工作估时', 'Headline still labels task estimates as total time');
+    assert(await page.locator('#data-explain').evaluate(n => !n.hidden && !n.open), 'Data notes should start as one collapsed line');
+    await page.locator('#data-explain > .disc-btn').click();
     assert((await page.locator('#work-breakdown').innerText()).includes('仅应用'), 'Application-only time hidden from the summary');
     await page.locator('#records-summary').click();
     await page.locator('#search').fill('不匹配的查询');
-    await page.locator('#category-filter').selectOption('写代码');
+    await pickCategory('写代码');
     await page.locator('#work-unclassified').focus();
     await page.keyboard.press('Enter');
-    assert(await page.locator('#search').inputValue() === '' && await page.locator('#category-filter').inputValue() === '全部', 'Unclassified drilldown retained filters');
+    assert(await page.locator('#search').inputValue() === '' && await category() === '全部', 'Unclassified drilldown retained filters');
     assert((await page.locator('#page-info').innerText()).startsWith((daily.work_time.app_spans.length + (daily.work_time.other_unclassified_spans||[]).length) + '项'), 'Unclassified drilldown lost timing intervals');
     assert((await page.locator('#filters-note').innerText()).includes('已计入工作估时'), 'Unclassified rows do not explain their inclusion');
     assert(await page.locator('#records-summary').evaluate(n => n === document.activeElement), 'Unclassified navigation lost keyboard focus');
@@ -36,9 +41,9 @@ async (page) => {
     const taskTitle = '讨论日／周／月报告的展示';
     const task = page.locator('.task-row').filter({ hasText: taskTitle });
     await page.locator('#records-summary').click();
-    await page.locator('#category-filter').selectOption('写代码');
+    await pickCategory('写代码');
     await task.click();
-    assert(await page.locator('#category-filter').inputValue() === '全部', 'Task navigation retained category');
+    assert(await category() === '全部', 'Task navigation retained category');
     assert((await page.locator('#page-info').innerText()).startsWith('1项'), 'Task navigation lost its record');
     assert((await page.locator('#filters-note').innerText()).includes(taskTitle), 'Selected task is unnamed');
     assert(await page.locator('#records-summary').evaluate(n => n === document.activeElement), 'Keyboard focus did not follow task navigation');
@@ -47,7 +52,7 @@ async (page) => {
     await task.click();
     assert(await page.locator('#search').inputValue() === '', 'Task navigation retained search');
     assert((await page.locator('#page-info').innerText()).startsWith('1项'), 'Search reset still gives empty task');
-    await page.locator('#category-filter').selectOption('写代码');
+    await pickCategory('写代码');
     assert(await page.locator('#records-empty').isVisible(), 'Manual category did not intersect task');
     assert((await page.locator('#filters-note').innerText()).includes('匹配 0项'), 'Filtered task count missing');
     await page.locator('#clear').click();
@@ -84,7 +89,7 @@ async (page) => {
     await page.getByRole('button', { name: '复制重试命令', exact: true }).click();
     await page.getByText('无法自动复制，请选中上方命令手动复制；尚未执行。', { exact: true }).waitFor();
     assert(await page.locator('#failures code').isVisible(), 'Denied clipboard hid selectable command');
-    await page.locator('#refresh-guide summary').click();
+    await page.locator('#refresh-guide > .disc-btn').click();
     const generated = await page.locator('#refresh-command code').innerText();
     assert(/^daylog report --date \d{4}-\d{2}-\d{2} --period day$/.test(generated), 'Regeneration lost selected date');
     await page.getByRole('tab', { name: '月', exact: true }).click();
@@ -93,7 +98,7 @@ async (page) => {
 
     await page.goto(reportURL);
     await page.setViewportSize({ width: 375, height: 812 });
-    const disclosure = page.locator('#rhythm-details summary');
+    const disclosure = page.locator('#rhythm-details > .disc-btn');
     await disclosure.focus();
     await page.keyboard.press('Enter');
     assert(await page.locator('#rhythm-details').evaluate(n => n.open), 'Timeline inaccessible from keyboard');
@@ -137,9 +142,9 @@ async (page) => {
     await page.route(rangeURL, rangeRoute);
     try {
       await page.goto(rangeURL);
-      await page.locator('#refresh-guide summary').click();
+      await page.locator('#refresh-guide > .disc-btn').click();
       assert(await page.locator('#refresh-command code').innerText() === 'daylog report --from ' + range.start + ' --to ' + range.end, 'Range regeneration lost exact boundaries');
-      await page.locator('#rhythm-details summary').click();
+      await page.locator('#rhythm-details > .disc-btn').click();
       assert((await page.locator('.timeline-list').innerText()).includes(range.start.slice(0, 10)), 'Range timeline lacks date context');
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Range command overflows mobile viewport');
     } finally {

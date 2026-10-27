@@ -53,7 +53,7 @@ daylog [--data 私有目录] <命令>
   pause [--minutes N]         暂停 1–1440 分钟，到时自动恢复
   resume                     恢复记录
   today [yesterday]           查看今天或昨天；--full 查看全部
-  report [day|week|month]     打开日／周／月报告；--no-open 只生成
+  report [day|week|month]     打开日／周／月报告；--no-open 只生成，--no-images 不含截图
   status [--verbose]          查看状态；--verbose 显示详情
   pending [--limit N]         查看待整理记录，默认最多 10 段
   analyze [--batch ID]        整理一段记录；--retry 立即重试

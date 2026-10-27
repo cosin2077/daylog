@@ -24,6 +24,14 @@ func main() {
 		{"验证报告的跨日边界、长任务标题与手机端交互，保留完整上下文供下次复盘", "运行跨日、跨周和去重统计测试，检查日报、周报与月报切换，以及搜索和打印样式。", "写代码"},
 		{"整理下一步事项", "在本地笔记中记录发布包、更新签名与后续验证事项。", "写东西"},
 	}
+	categoryApp := map[string]string{"写代码": "com.microsoft.VSCode", "查资料": "com.google.Chrome", "聊天沟通": "ru.keepcoder.Telegram", "写东西": "com.apple.Notes"}
+	// Synthetic screenshots for the anchor day only (drawn in code, see frames.go).
+	type shot struct {
+		at       time.Time
+		app      string
+		evidence bool
+	}
+	var shots []shot
 	var reports []journal.Report
 	for day := -45; day <= 0; day++ {
 		date := anchor.AddDate(0, 0, day)
@@ -38,11 +46,20 @@ func main() {
 			}
 			id := journal.ID(at)
 			end := at.Add(time.Duration(12+(i*7)%26) * time.Minute)
-			reports = append(reports, journal.Report{SchemaVersion: 2, AppSource: "window_server", Start: at, End: end.Add(7 * time.Minute), UnknownSpans: []journal.TimeSpan{{Start: end, End: end.Add(7 * time.Minute)}}, BatchID: id, Source: "agent:claude", CreatedAt: at.Add(20 * time.Minute), Cards: []journal.Card{{ActivityID: "act_" + id, TaskID: fmt.Sprintf("task_%d", (i+day+48)%len(tasks)), Apps: []string{"Demo Editor"}, DurationMethod: "bounded_observation_v1", Confidence: "medium", Spans: []journal.TimeSpan{{Start: at, End: end}}, Start: at, End: end, Title: task.title, Summary: task.summary, Category: task.category, Evidence: []string{id, journal.ID(at.Add(5 * time.Minute))}}}})
+			app := categoryApp[task.category]
+			if day == 0 {
+				for point := at; !point.After(end.Add(7 * time.Minute)); point = point.Add(time.Minute) {
+					evidence := point.Equal(at) || point.Equal(at.Add(5*time.Minute))
+					if evidence || point.Sub(at)%(2*time.Minute) == 0 {
+						shots = append(shots, shot{point, app, evidence})
+					}
+				}
+			}
+			reports = append(reports, journal.Report{SchemaVersion: 2, AppSource: "window_server", Start: at, End: end.Add(7 * time.Minute), UnknownSpans: []journal.TimeSpan{{Start: end, End: end.Add(7 * time.Minute)}}, BatchID: id, Source: "agent:claude", CreatedAt: at.Add(20 * time.Minute), Cards: []journal.Card{{ActivityID: "act_" + id, TaskID: fmt.Sprintf("task_%d", (i+day+48)%len(tasks)), Apps: []string{app}, DurationMethod: "bounded_observation_v1", Confidence: "medium", Spans: []journal.TimeSpan{{Start: at, End: end}}, Start: at, End: end, Title: task.title, Summary: task.summary, Category: task.category, Evidence: []string{id, journal.ID(at.Add(5 * time.Minute))}}}})
 			last := &reports[len(reports)-1]
 			last.EstimationVersion = "bounded_neighbors_v4"
 			for point := last.Start; !point.After(last.End); point = point.Add(30 * time.Second) {
-				observation := journal.TaskObservation{At: point, State: "sampled", App: "Demo Editor", MaxGapSeconds: 60}
+				observation := journal.TaskObservation{At: point, State: "sampled", App: app, MaxGapSeconds: 60}
 				if !point.After(end) {
 					observation.TaskID = last.Cards[0].TaskID
 					observation.ActivityID = last.Cards[0].ActivityID
@@ -70,7 +87,8 @@ func main() {
 				c.Start = point
 			}
 			c.End = point.Add(time.Nanosecond)
-			c.Evidence = append(c.Evidence, fmt.Sprintf("demo-%d", i))
+			c.Evidence = append(c.Evidence, journal.ID(point))
+			shots = append(shots, shot{point, apps[task], true})
 			if i > 0 && sequence[i-1] == task {
 				c.Spans = append(c.Spans, journal.TimeSpan{Start: point.Add(-time.Minute), End: point})
 				c.EstimatedSeconds += 60
@@ -116,6 +134,12 @@ func main() {
 		o = journal.BuildOverview(anchor, []journal.Report{r}, nil, journal.Batch{})
 	}
 	o.Sample = true
+	sources := make([]journal.FrameSource, 0, len(shots))
+	for i, sh := range shots {
+		sh, seed := sh, i
+		sources = append(sources, journal.FrameSource{ID: journal.ID(sh.at), At: sh.at, App: sh.app, Evidence: sh.evidence, Read: func() ([]byte, error) { return mockFrame(sh.at, sh.app, seed), nil }})
+	}
+	o.Images = journal.BuildReportImages(anchor, anchor.AddDate(0, 0, 1), sources, journal.DefaultImageOptions())
 	data, err := journal.RenderHTML(o, "day")
 	if err != nil {
 		panic(err)

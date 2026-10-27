@@ -110,6 +110,7 @@ type Overview struct {
 	Timezone         string         `json:"timezone"`
 	Sample           bool           `json:"sample"`
 	Views            []PeriodReport `json:"views"`
+	Images           *ReportImages  `json:"images,omitempty"`
 }
 
 func PeriodBounds(period string, anchor time.Time) (time.Time, time.Time, error) {
