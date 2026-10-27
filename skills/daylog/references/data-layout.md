@@ -1,4 +1,4 @@
-# Read Daylog results (v0.4 with legacy support)
+# Read Daylog results (current and legacy formats)
 
 Use this reference when answering questions about recorded activity, time spent, or local files. The default root is `~/.daylog`; respect an explicitly selected `--data` root. Do not read the whole directory into model context.
 
